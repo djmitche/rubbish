@@ -1,47 +1,57 @@
+//! Content-Addressible Storage
+//!
+//! This crate provides a content-addressible storage pool with the following characteristics:
+//!
+//!  * Stores arbitrary data, in an encoded format.
+//!  * Does not support deletion
+//!
+//! # Examples
+//!
+//! ```
+//! let mut storage = cas::Storage::new();
+//! let hash = storage.store(&42u32);
+//! let result : Option<u32> = storage.retrieve(&hash);
+//! assert_eq!(result, Some(42u32));
+//! ```
+
 extern crate crypto;
 extern crate serde;
 extern crate bincode;
 extern crate rustc_serialize;
 
+mod hash;
+
+use hash::Hash;
 use std::collections::HashMap;
-use std::fmt;
 use serde::{Serialize, Deserialize};
 use bincode::{SizeLimit};
 use bincode::serde::{serialize, deserialize};
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
-use rustc_serialize::hex::ToHex;
 
-#[derive(PartialEq, Eq, Hash, Clone)]
-pub struct Hash(Vec<u8>);
-
-impl Hash {
-    pub fn to_hex(&self) -> String {
-        self.0[..].to_hex()
-    }
-}
-
-impl fmt::Debug for Hash {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0[..].to_hex())
-    }
-}
-
+/// Type Content represents the encoded version of the caller's data.
 #[derive(Debug, PartialEq)]
 struct Content(Vec<u8>);
 
+/// Type Storage provides a content-addressible storage pool.  The content
+/// inserted into the mechanism can be of any Serializable+Deserializable type.
 #[derive(Debug)]
 pub struct Storage {
     map: HashMap<Hash, Content>,
 }
 
 impl Storage {
+    /// Create a new, empty storage pool.
     pub fn new() -> Storage {
         Storage {
             map: HashMap::new(),
         }
     }
 
+    /// Insert content into the storage pool, returning the Hash pointing to the content.
+    ///
+    /// Inserting the same content twice will result in the same Hash (and no additional
+    /// use of space).
     pub fn store<T: Serialize + Deserialize>(&mut self, content: &T) -> Hash {
         let (hash, encoded) = hash_content(content);
         self.map.insert(hash.clone(), encoded);
@@ -49,6 +59,11 @@ impl Storage {
         return hash;
     }
 
+    /// Retrieve content by hash.
+    ///
+    /// The deserialized type must match the type used with `store()` or unpredictable
+    /// results will be returned (or a panic).
+    // TODO: fix that with Storage<T> somehow
     pub fn retrieve<T: Serialize + Deserialize>(&self, hash: &Hash) -> Option<T> {
         match self.map.get(hash) {
             None => None,
@@ -74,13 +89,15 @@ fn decode_content<T: Serialize + Deserialize>(encoded: &Content) -> T {
 
 #[cfg(test)]
 mod tests {
+    use hash::Hash;
+
     #[test]
     fn put_get_strings() {
         let mut storage = super::Storage::new();
 
         let hash1 = storage.store(&"one".to_string());
         let hash2 = storage.store(&"two".to_string());
-        let badhash = super::Hash(vec![0, 32]);
+        let badhash = Hash(vec![0, 32]);
 
         assert_eq!(storage.retrieve::<String>(&hash1), Some("one".to_string()));
         assert_eq!(storage.retrieve::<String>(&hash2), Some("two".to_string()));
@@ -111,6 +128,7 @@ mod tests {
     fn hash_content_of_string() {
         let (hash, encoded) = super::hash_content(&"abcd".to_string());
         println!("{:?}", hash);
+        assert_eq!(hash, Hash::from_hex("9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841"));
         assert_eq!(hash.to_hex(), "9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841");
         assert_eq!(encoded, super::Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100]));
     }
