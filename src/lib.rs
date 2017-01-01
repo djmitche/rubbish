@@ -22,6 +22,7 @@ mod hash;
 
 use hash::Hash;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use rustc_serialize::{Decodable, Encodable};
 use bincode::SizeLimit;
 use bincode::rustc_serialize::{encode, decode};
@@ -40,9 +41,8 @@ pub struct Storage<T> {
     map: HashMap<Hash, Content>,
 
     // Rust requires that "T" appear somewhere in the struct, but we don't need
-    // it since all instances of the type are stored in an encoded form.  So
-    // this extra struct item exists purely to make the compiler happy.
-    _unused: Option<T>,
+    // it since all instances of the type are stored in an encoded form.
+    _phantom: PhantomData<T>,
 }
 
 impl <T: Encodable + Decodable> Storage<T> {
@@ -50,7 +50,7 @@ impl <T: Encodable + Decodable> Storage<T> {
     pub fn new() -> Storage<T> {
         Storage {
             map: HashMap::new(),
-            _unused: None,
+            _phantom: PhantomData,
         }
     }
 
