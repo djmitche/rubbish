@@ -19,28 +19,19 @@ extern crate bincode;
 extern crate rustc_serialize;
 
 mod hash;
+mod content;
 
 use hash::Hash;
+use content::Content;
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use rustc_serialize::{Decodable, Encodable};
-use bincode::SizeLimit;
-use bincode::rustc_serialize::{encode, decode};
-
-/// Type Content represents the encoded version of the caller's data.
-#[derive(Debug, PartialEq)]
-struct Content(Vec<u8>);
 
 /// Type Storage provides a content-addressible storage pool.  The content
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
 /// traits `Decodable` and `Encodable`.
 #[derive(Debug)]
-pub struct Storage<T> {
-    map: HashMap<Hash, Content>,
-
-    // Rust requires that "T" appear somewhere in the struct, but we don't need
-    // it since all instances of the type are stored in an encoded form.
-    _phantom: PhantomData<T>,
+pub struct Storage<T: Encodable + Decodable> {
+    map: HashMap<Hash, Content<T>>,
 }
 
 impl <T: Encodable + Decodable> Storage<T> {
@@ -48,7 +39,6 @@ impl <T: Encodable + Decodable> Storage<T> {
     pub fn new() -> Storage<T> {
         Storage {
             map: HashMap::new(),
-            _phantom: PhantomData,
         }
     }
 
@@ -56,8 +46,8 @@ impl <T: Encodable + Decodable> Storage<T> {
     ///
     /// Inserting the same content twice will result in the same Hash (and no additional
     /// use of space).
-    pub fn store(&mut self, content: &T) -> Hash {
-        let (hash, encoded) = hash_content(content);
+    pub fn store(&mut self, value: &T) -> Hash {
+        let (hash, encoded) = Content::encode(value);
         self.map.insert(hash.clone(), encoded);
         // TODO: detect collisions (requires copying encoded?)
         return hash;
@@ -67,20 +57,9 @@ impl <T: Encodable + Decodable> Storage<T> {
     pub fn retrieve(&self, hash: &Hash) -> Option<T> {
         match self.map.get(hash) {
             None => None,
-            Some(encoded) => Some(decode_content(encoded)),
+            Some(encoded) => Some(encoded.decode()),
         }
     }
-}
-
-fn hash_content<T: Encodable + Decodable>(content: &T) -> (Hash, Content) {
-    let encoded: Content = Content(encode(content, SizeLimit::Infinite).unwrap());
-
-    let hash = Hash::for_bytes(&encoded.0);
-    return (hash, encoded);
-}
-
-fn decode_content<T: Encodable + Decodable>(encoded: &Content) -> T {
-    decode(&encoded.0).unwrap()
 }
 
 #[cfg(test)]
@@ -107,18 +86,5 @@ mod tests {
         let hash1 = storage.store(&"xyz".to_string());
         let hash2 = storage.store(&"xyz".to_string());
         assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn hash_content_of_string() {
-        let (hash, encoded) = super::hash_content(&"abcd".to_string());
-        assert_eq!(hash, Hash::from_hex("9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841"));
-        assert_eq!(hash.to_hex(), "9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841");
-        assert_eq!(encoded, super::Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100]));
-    }
-
-    #[test]
-    fn decode_content_abcd() {
-        assert_eq!(super::decode_content::<String>(&super::Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100])), "abcd".to_string());
     }
 }
