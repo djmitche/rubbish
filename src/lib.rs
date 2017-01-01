@@ -26,8 +26,6 @@ use std::marker::PhantomData;
 use rustc_serialize::{Decodable, Encodable};
 use bincode::SizeLimit;
 use bincode::rustc_serialize::{encode, decode};
-use crypto::digest::Digest;
-use crypto::sha2::Sha256;
 
 /// Type Content represents the encoded version of the caller's data.
 #[derive(Debug, PartialEq)]
@@ -77,11 +75,7 @@ impl <T: Encodable + Decodable> Storage<T> {
 fn hash_content<T: Encodable + Decodable>(content: &T) -> (Hash, Content) {
     let encoded: Content = Content(encode(content, SizeLimit::Infinite).unwrap());
 
-    let mut sha = Sha256::new();
-    sha.input(&encoded.0[..]);
-
-    let mut hash = Hash(vec![0; sha.output_bytes()]);
-    sha.result(&mut hash.0);
+    let hash = Hash::for_bytes(&encoded.0);
     return (hash, encoded);
 }
 
@@ -99,7 +93,7 @@ mod tests {
 
         let hash1 = storage.store(&"one".to_string());
         let hash2 = storage.store(&"two".to_string());
-        let badhash = Hash(vec![0, 32]);
+        let badhash = Hash::from_hex("000000");
 
         assert_eq!(storage.retrieve(&hash1), Some("one".to_string()));
         assert_eq!(storage.retrieve(&hash2), Some("two".to_string()));
@@ -118,7 +112,6 @@ mod tests {
     #[test]
     fn hash_content_of_string() {
         let (hash, encoded) = super::hash_content(&"abcd".to_string());
-        println!("{:?}", hash);
         assert_eq!(hash, Hash::from_hex("9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841"));
         assert_eq!(hash.to_hex(), "9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841");
         assert_eq!(encoded, super::Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100]));
