@@ -6,5 +6,4 @@ authors = ["Dustin J. Mitchell <dustin@mozilla.com>"]
 [dependencies]
 rust-crypto = "0.2.36"
 bincode = "0.6.0"
-serde = "0.8.12"
 rustc-serialize = "0.3.22"

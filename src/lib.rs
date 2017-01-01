@@ -15,7 +15,6 @@
 //! ```
 
 extern crate crypto;
-extern crate serde;
 extern crate bincode;
 extern crate rustc_serialize;
 
@@ -23,9 +22,9 @@ mod hash;
 
 use hash::Hash;
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
-use bincode::{SizeLimit};
-use bincode::serde::{serialize, deserialize};
+use rustc_serialize::{Decodable, Encodable};
+use bincode::SizeLimit;
+use bincode::rustc_serialize::{encode, decode};
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 
@@ -34,7 +33,8 @@ use crypto::sha2::Sha256;
 struct Content(Vec<u8>);
 
 /// Type Storage provides a content-addressible storage pool.  The content
-/// inserted into the mechanism can be of any Serializable+Deserializable type.
+/// inserted into the mechanism can be of any type implementing the `rustc_serialize`
+/// traits `Decodable` and `Encodable`.
 #[derive(Debug)]
 pub struct Storage {
     map: HashMap<Hash, Content>,
@@ -52,7 +52,7 @@ impl Storage {
     ///
     /// Inserting the same content twice will result in the same Hash (and no additional
     /// use of space).
-    pub fn store<T: Serialize + Deserialize>(&mut self, content: &T) -> Hash {
+    pub fn store<T: Encodable + Decodable>(&mut self, content: &T) -> Hash {
         let (hash, encoded) = hash_content(content);
         self.map.insert(hash.clone(), encoded);
         // TODO: detect collisions (requires copying encoded?)
@@ -64,7 +64,7 @@ impl Storage {
     /// The deserialized type must match the type used with `store()` or unpredictable
     /// results will be returned (or a panic).
     // TODO: fix that with Storage<T> somehow
-    pub fn retrieve<T: Serialize + Deserialize>(&self, hash: &Hash) -> Option<T> {
+    pub fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Option<T> {
         match self.map.get(hash) {
             None => None,
             Some(encoded) => Some(decode_content(encoded)),
@@ -72,8 +72,8 @@ impl Storage {
     }
 }
 
-fn hash_content<T: Serialize + Deserialize>(content: &T) -> (Hash, Content) {
-    let encoded: Content = Content(serialize(content, SizeLimit::Infinite).unwrap());
+fn hash_content<T: Encodable + Decodable>(content: &T) -> (Hash, Content) {
+    let encoded: Content = Content(encode(content, SizeLimit::Infinite).unwrap());
 
     let mut sha = Sha256::new();
     sha.input(&encoded.0[..]);
@@ -83,8 +83,8 @@ fn hash_content<T: Serialize + Deserialize>(content: &T) -> (Hash, Content) {
     return (hash, encoded);
 }
 
-fn decode_content<T: Serialize + Deserialize>(encoded: &Content) -> T {
-    deserialize(&encoded.0).unwrap()
+fn decode_content<T: Encodable + Decodable>(encoded: &Content) -> T {
+    decode(&encoded.0).unwrap()
 }
 
 #[cfg(test)]
