@@ -36,15 +36,21 @@ struct Content(Vec<u8>);
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
 /// traits `Decodable` and `Encodable`.
 #[derive(Debug)]
-pub struct Storage {
+pub struct Storage<T> {
     map: HashMap<Hash, Content>,
+
+    // Rust requires that "T" appear somewhere in the struct, but we don't need
+    // it since all instances of the type are stored in an encoded form.  So
+    // this extra struct item exists purely to make the compiler happy.
+    _unused: Option<T>,
 }
 
-impl Storage {
+impl <T: Encodable + Decodable> Storage<T> {
     /// Create a new, empty storage pool.
-    pub fn new() -> Storage {
+    pub fn new() -> Storage<T> {
         Storage {
             map: HashMap::new(),
+            _unused: None,
         }
     }
 
@@ -52,7 +58,7 @@ impl Storage {
     ///
     /// Inserting the same content twice will result in the same Hash (and no additional
     /// use of space).
-    pub fn store<T: Encodable + Decodable>(&mut self, content: &T) -> Hash {
+    pub fn store(&mut self, content: &T) -> Hash {
         let (hash, encoded) = hash_content(content);
         self.map.insert(hash.clone(), encoded);
         // TODO: detect collisions (requires copying encoded?)
@@ -60,11 +66,7 @@ impl Storage {
     }
 
     /// Retrieve content by hash.
-    ///
-    /// The deserialized type must match the type used with `store()` or unpredictable
-    /// results will be returned (or a panic).
-    // TODO: fix that with Storage<T> somehow
-    pub fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Option<T> {
+    pub fn retrieve(&self, hash: &Hash) -> Option<T> {
         match self.map.get(hash) {
             None => None,
             Some(encoded) => Some(decode_content(encoded)),
@@ -99,29 +101,18 @@ mod tests {
         let hash2 = storage.store(&"two".to_string());
         let badhash = Hash(vec![0, 32]);
 
-        assert_eq!(storage.retrieve::<String>(&hash1), Some("one".to_string()));
-        assert_eq!(storage.retrieve::<String>(&hash2), Some("two".to_string()));
-        assert_eq!(storage.retrieve::<String>(&badhash), None);
+        assert_eq!(storage.retrieve(&hash1), Some("one".to_string()));
+        assert_eq!(storage.retrieve(&hash2), Some("two".to_string()));
+        assert_eq!(storage.retrieve(&badhash), None);
     }
 
     #[test]
-    fn put_get_various_types() {
+    fn put_twice() {
         let mut storage = super::Storage::new();
 
-        let hash1 = storage.store(&1u32);
-        let hash2 = storage.store(&0.25f64);
-
-        assert_eq!(storage.retrieve::<u32>(&hash1), Some(1u32));
-        assert_eq!(storage.retrieve::<f64>(&hash2), Some(0.25f64));
-    }
-
-    #[test]
-    #[should_panic]
-    fn put_get_different_types() {
-        let mut storage = super::Storage::new();
-
-        let hash = storage.store(&1u32);
-        storage.retrieve::<f64>(&hash);
+        let hash1 = storage.store(&"xyz".to_string());
+        let hash2 = storage.store(&"xyz".to_string());
+        assert_eq!(hash1, hash2);
     }
 
     #[test]
