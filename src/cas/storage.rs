@@ -1,5 +1,5 @@
-use hash::Hash;
-use content::Content;
+use super::hash::Hash;
+use super::content::Content;
 use std::collections::HashMap;
 use rustc_serialize::{Decodable, Encodable};
 
@@ -42,7 +42,7 @@ impl <T: Encodable + Decodable> Storage<T> {
 #[cfg(test)]
 mod tests {
     use super::Storage;
-    use hash::Hash;
+    use super::super::hash::Hash;
 
     #[test]
     fn put_get_strings() {
