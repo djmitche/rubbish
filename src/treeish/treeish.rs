@@ -35,8 +35,8 @@ impl <C: ContentAddressibleStorage<Object>> Treeish<C> {
     pub fn get_commit(&self, hash: &Hash) -> Commit {
         let obj = self.storage.retrieve(hash).unwrap();
         match obj {
-            Object::Commit{ tree, parents } => {
-                return Commit::new(self.get_tree_entry(&tree), parents);
+            Object::Commit{ root, parents } => {
+                return Commit::new(self.get_tree_entry(&root), parents);
             },
             _ => panic!("{:?} is not a commit", hash),
         };
@@ -63,7 +63,7 @@ impl <C: ContentAddressibleStorage<Object>> Treeish<C> {
 
     pub fn add_commit(&mut self, commit: &Commit) -> Hash {
         let tree = self.add_tree_entry(&commit.root);
-        let obj = Object::Commit{ tree: tree, parents: commit.parents.clone() };
+        let obj = Object::Commit{ root: tree, parents: commit.parents.clone() };
         self.storage.store(&obj)
     }
 }
@@ -86,9 +86,9 @@ mod test {
         let mut children: HashMap<String, Hash> = HashMap::new();
         children.insert("one".to_string(), d1);
         children.insert("two".to_string(), d2);
-        let tree = storage.store(&Object::Tree{ children: children });
+        let root = storage.store(&Object::Tree{ children: children });
         let commit = storage.store(&Object::Commit{
-            tree: tree,
+            root: root,
             parents: vec![],
         });
 
@@ -106,8 +106,8 @@ mod test {
     }
 
     fn unwrap_commit(object: &Object) -> (&Hash, &Vec<Hash>) {
-        if let &Object::Commit{ ref tree, ref parents } = object {
-            return (tree, parents);
+        if let &Object::Commit{ ref root, ref parents } = object {
+            return (root, parents);
         } else {
             panic!("Not a commit");
         }

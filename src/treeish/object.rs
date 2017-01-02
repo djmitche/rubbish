@@ -7,7 +7,7 @@ use std::collections::HashMap;
 pub enum Object {
     // A commit represents the root of a tree, as evolved from its parents
     Commit {
-        tree: Hash,  // TODO: root
+        root: Hash,  // TODO: root
         parents: Vec<Hash>,
     },
 
