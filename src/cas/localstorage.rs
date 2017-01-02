@@ -3,22 +3,18 @@ use super::content::Content;
 use std::collections::HashMap;
 use rustc_serialize::{Decodable, Encodable};
 
-/// Type Storage provides a distributed content-addressible storage pool.  The content
+/// Type LocalStorage provides a local content-addressible storage pool.  The content
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
 /// traits `Decodable` and `Encodable`.
-///
-/// # TODO
-///
-/// * Actually be distributed
 #[derive(Debug)]
-pub struct Storage<T: Encodable + Decodable> {
+pub struct LocalStorage<T: Encodable + Decodable> {
     map: HashMap<Hash, Content<T>>,
 }
 
-impl <T: Encodable + Decodable> Storage<T> {
+impl <T: Encodable + Decodable> LocalStorage<T> {
     /// Create a new, empty storage pool.
-    pub fn new() -> Storage<T> {
-        Storage {
+    pub fn new() -> LocalStorage<T> {
+        LocalStorage {
             map: HashMap::new(),
         }
     }
@@ -45,12 +41,12 @@ impl <T: Encodable + Decodable> Storage<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::Storage;
+    use super::LocalStorage;
     use super::super::hash::Hash;
 
     #[test]
     fn put_get_strings() {
-        let mut storage = Storage::new();
+        let mut storage = LocalStorage::new();
 
         let hash1 = storage.store(&"one".to_string());
         let hash2 = storage.store(&"two".to_string());
@@ -63,7 +59,7 @@ mod tests {
 
     #[test]
     fn put_twice() {
-        let mut storage = super::Storage::new();
+        let mut storage = super::LocalStorage::new();
 
         let hash1 = storage.store(&"xyz".to_string());
         let hash2 = storage.store(&"xyz".to_string());

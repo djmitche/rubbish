@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```
-//! let mut storage = cas::Storage::new();
+//! let mut storage = rubbish::cas::Storage::new();
 //! let hash = storage.store(&42u32);
 //! let result : Option<u32> = storage.retrieve(&hash);
 //! assert_eq!(result, Some(42u32));
@@ -17,5 +17,10 @@
 mod hash;
 mod content;
 mod storage;
-
 pub use self::storage::Storage;
+
+// LocalStorage is for test use only
+#[cfg(test)]
+mod localstorage;
+#[cfg(test)]
+pub use self::localstorage::LocalStorage;
