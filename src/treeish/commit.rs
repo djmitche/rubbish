@@ -13,4 +13,12 @@ impl Commit {
     pub fn new(root: TreeEntry, parents: Vec<Hash>) -> Commit {
         Commit{root: root, parents: parents}
     }
+
+    // Create a commit with no parents an an empty tree
+    pub fn empty() -> Commit {
+        Commit {
+            root: TreeEntry::new_tree(),
+            parents: vec![],
+        }
+    }
 }

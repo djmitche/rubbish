@@ -14,10 +14,12 @@ pub enum TreeEntry {
 }
 
 impl TreeEntry {
+    /// Create a new Blob entry, given the bytestring it should contain
     pub fn new_blob(data: Vec<u8>) -> TreeEntry {
         TreeEntry::Blob{ data: data }
     }
 
+    // Create a new, empty Tree entry
     pub fn new_tree() -> TreeEntry {
         TreeEntry::SubTree{ children: HashMap::new() }
     }

@@ -7,9 +7,11 @@
 //! # Examples
 //!
 //! ```
-//! use rubbish::treeish::Treeish;
+//! use rubbish::treeish::{Treeish, Commit};
 //! use rubbish::cas::Storage;
-//! let treeish = Treeish::new(Storage::new());
+//! let mut treeish = Treeish::new(Storage::new());
+//! let commit = Commit::empty();
+//! let commit_hash = treeish.add_commit(&commit);
 //! ```
 
 mod object;
