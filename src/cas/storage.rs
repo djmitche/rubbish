@@ -1,4 +1,5 @@
 use super::hash::Hash;
+use super::traits::ContentAddressibleStorage;
 use super::content::Content;
 use std::collections::HashMap;
 use rustc_serialize::{Decodable, Encodable};
@@ -22,20 +23,17 @@ impl <T: Encodable + Decodable> Storage<T> {
             map: HashMap::new(),
         }
     }
+}
 
-    /// Insert content into the storage pool, returning the Hash pointing to the content.
-    ///
-    /// Inserting the same content twice will result in the same Hash (and no additional
-    /// use of space).
-    pub fn store(&mut self, value: &T) -> Hash {
+impl <T: Encodable + Decodable> ContentAddressibleStorage<T> for Storage<T> {
+    fn store(&mut self, value: &T) -> Hash {
         let (hash, encoded) = Content::encode(value);
         self.map.insert(hash.clone(), encoded);
         // TODO: detect collisions (requires copying encoded?)
         return hash;
     }
 
-    /// Retrieve content by hash.
-    pub fn retrieve(&self, hash: &Hash) -> Option<T> {
+    fn retrieve(&self, hash: &Hash) -> Option<T> {
         match self.map.get(hash) {
             None => None,
             Some(encoded) => Some(encoded.decode()),
@@ -47,6 +45,7 @@ impl <T: Encodable + Decodable> Storage<T> {
 mod tests {
     use super::Storage;
     use super::super::hash::Hash;
+    use super::super::traits::ContentAddressibleStorage;
 
     #[test]
     fn put_get_strings() {
