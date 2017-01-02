@@ -1,4 +1,5 @@
 use cas::Hash;
+use std::result::Result;
 use super::TreeEntry;
 
 /// A commit represents an "expanded" commit object, complete with a tree.  The
@@ -20,5 +21,33 @@ impl Commit {
             root: TreeEntry::new_tree(),
             parents: vec![],
         }
+    }
+
+    pub fn read(&self, path: &[&str]) -> Result<&Vec<u8>, String> {
+        self.root.read(path)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Commit;
+    use super::super::TreeEntry;
+
+    fn make_test_commit() -> Commit {
+        let mut tree = TreeEntry::new_tree();
+        tree.add_child("six".to_string(), TreeEntry::new_blob(vec![6]));
+        Commit::new(tree, vec![])
+    }
+
+    #[test]
+    fn read_exists() {
+        let commit = make_test_commit();
+        assert_eq!(commit.read(&["six"]), Ok(&vec![6u8]));
+    }
+
+    #[test]
+    fn read_nonexistent() {
+        let commit = make_test_commit();
+        assert_eq!(commit.read(&["xxx"]), Err("[\"xxx\"] not found".to_string()));
     }
 }

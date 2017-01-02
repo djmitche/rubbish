@@ -28,3 +28,8 @@ The components of the system are as follows:
    locks.  The provided client interface is HTTP.
 
 The entire application is, of course, a work in progress.
+
+## TODO
+
+ * Support writing to trees (generates a new tree)
+ * Use arrays and slices instead of vectors? For byte sequences?
