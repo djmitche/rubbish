@@ -3,3 +3,4 @@ extern crate bincode;
 extern crate rustc_serialize;
 
 pub mod cas;
+pub mod treeish;

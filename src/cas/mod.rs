@@ -22,6 +22,7 @@ mod content;
 mod storage;
 mod traits;
 
+pub use self::hash::Hash;
 pub use self::storage::Storage;
 pub use self::traits::ContentAddressibleStorage;
 

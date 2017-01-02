@@ -4,7 +4,7 @@ use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 
 /// Type Hash represents the key under which content is stored.
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, RustcDecodable, RustcEncodable)]
 pub struct Hash(Vec<u8>);
 
 impl Hash {
