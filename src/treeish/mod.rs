@@ -1,5 +1,19 @@
+//! A Git-like versioned filesystem, based on `cas`.  This includes
+//! the idea of a "commit" with parent commits and a nested tree structure
+//! associated with each commit.  It does not attempt to store a deep history
+//! for the filesystem, instead garbage collecting commits beyond configured
+//! thresholds even if they are part of the active history.
+//!
+//! # Examples
+//!
+//! ```
+//! use rubbish::treeish::Treeish;
+//! use rubbish::cas::Storage;
+//! let treeish = Treeish::new(Storage::new());
+//! ```
+
 use cas::{Hash, ContentAddressibleStorage};
-use std::collections::HashMap;
+
 
 mod tree;
 pub use self::tree::TreeEntry;
@@ -7,26 +21,8 @@ pub use self::tree::TreeEntry;
 mod commit;
 pub use self::commit::Commit;
 
-/// Objects get encoded into the CAS, but are interlinked with hashes
-/// instead of references.
-#[derive(RustcDecodable, RustcEncodable)]
-pub enum Object {  // TODO: make non pub (need to make a trait)
-    // A commit represents the root of a tree, as evolved from its parents
-    Commit {
-        tree: Hash,
-        parents: Vec<Hash>,
-    },
-
-    // A tree represents a "directory", containing either blobs or more trees
-    Tree {
-        children: HashMap<String, Hash>,
-    },
-
-    // A blob represents data (like a file)
-    Blob {
-        data: Vec<u8>,
-    },
-}
+mod object;
+use self::object::Object;
 
 pub struct Treeish<C: ContentAddressibleStorage<Object>> {
     storage: C,
@@ -37,16 +33,6 @@ impl <C: ContentAddressibleStorage<Object>> Treeish<C> {
         Treeish {
             storage: storage,
         }
-    }
-
-    pub fn get_commit(&self, hash: &Hash) -> Commit {
-        let obj : Object = self.storage.retrieve(hash).unwrap();
-        match obj {
-            Object::Commit{ tree, parents } => {
-                return Commit::new(self.get_tree_entry(&tree), parents);
-            },
-            _ => panic!("{:?} is not a commit", hash),
-        };
     }
 
     fn get_tree_entry(&self, hash: &Hash) -> TreeEntry {
@@ -65,26 +51,37 @@ impl <C: ContentAddressibleStorage<Object>> Treeish<C> {
             _ => panic!("{:?} is not a tree or a blob", hash),
         };
     }
+
+    pub fn get_commit(&self, hash: &Hash) -> Commit {
+        let obj = self.storage.retrieve(hash).unwrap();
+        match obj {
+            Object::Commit{ tree, parents } => {
+                return Commit::new(self.get_tree_entry(&tree), parents);
+            },
+            _ => panic!("{:?} is not a commit", hash),
+        };
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Treeish, Object, TreeEntry};
+    use super::{Treeish, TreeEntry};
+    use super::object::Object;
     use cas::{LocalStorage, ContentAddressibleStorage, Hash};
     use std::collections::HashMap;
 
     #[test]
     fn get_commit() {
-        let mut treeish : Treeish<LocalStorage<Object>> = Treeish::new(LocalStorage::new());
+        let mut storage = LocalStorage::new();
 
         // add a commit with a tree directly to storage
-        let d1 = treeish.storage.store(&Object::Blob{ data: vec![1] });
-        let d2 = treeish.storage.store(&Object::Blob{ data: vec![2] });
+        let d1 = storage.store(&Object::Blob{ data: vec![1] });
+        let d2 = storage.store(&Object::Blob{ data: vec![2] });
         let mut children: HashMap<String, Hash> = HashMap::new();
         children.insert("one".to_string(), d1);
         children.insert("two".to_string(), d2);
-        let tree = treeish.storage.store(&Object::Tree{ children: children });
-        let commit = treeish.storage.store(&Object::Commit{
+        let tree = storage.store(&Object::Tree{ children: children });
+        let commit = storage.store(&Object::Commit{
             tree: tree,
             parents: vec![],
         });
@@ -95,6 +92,8 @@ mod test {
         tree.add_child("two".to_string(), TreeEntry::new_blob(vec![2]));
 
         // unpack and verify the commit
+        let treeish = Treeish::new(storage);
+
         let commit = treeish.get_commit(&commit);
         assert_eq!(commit.root, tree);
         assert_eq!(commit.parents, vec![]);

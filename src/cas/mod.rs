@@ -1,11 +1,9 @@
-//! Content-Addressible Storage
+//! `cas` -- a distributed, content-addressible, in-memory storage system.  The
+//! system uses a "gossip"-style protocol to ensure that all participants have
+//! all content, and supports generational garbage collection and persistence
+//! to disk.
 //!
-//! This module provides a content-addressible storage pool with the following characteristics:
-//!
-//!  * Stores arbitrary data, in an encoded format.
-//!  * Does not support deletion
-//!
-//! Its API is in the `ContentAddressibleStorage` trait.
+//! The API is in the `ContentAddressibleStorage` trait.
 //!
 //! # Examples
 //!

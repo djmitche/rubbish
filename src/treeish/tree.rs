@@ -3,7 +3,7 @@ use std::collections::HashMap;
 /// A TreeEntry represents a fully-linked tree of data
 #[derive(PartialEq, Debug)]
 pub enum TreeEntry {
-    // TODO: use references to the underlying Object here (need to sort out lifetimes)
+    // TODO: use references to the data in the underlying Object here (need to sort out lifetimes)
     SubTree {
         children: HashMap<String, TreeEntry>,
     },
