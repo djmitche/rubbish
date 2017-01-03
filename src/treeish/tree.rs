@@ -36,25 +36,28 @@ impl TreeEntry {
         }
     }
 
-    pub fn read(&self, path: &[&str]) -> Result<&Vec<u8>, String> {
-        self._read(path, path)
-    }
+    pub fn read(&self, fullpath: &[&str]) -> Result<&Vec<u8>, String> {
+        let mut path = fullpath;
+        let mut te = self;
 
-    fn _read(&self, fullpath: &[&str], path: &[&str]) -> Result<&Vec<u8>, String> {
-        if path.len() == 0 {
-            if let &TreeEntry::Blob{ ref data } = self {
-                return Ok(data);
+        loop {
+            if path.len() == 0 {
+                if let &TreeEntry::Blob{ ref data } = te {
+                    return Ok(data);
+                } else {
+                    return Err(format!("{:?} is not a blob", fullpath));
+                }
             } else {
-                return Err(format!("{:?} is not a blob", fullpath));
-            }
-        } else {
-            if let &TreeEntry::SubTree{ ref children } = self {
-                return match children.get(path[0]) {
-                    Some(sub) => sub._read(fullpath, &path[1..]),
-                    None => Err(format!("{:?} not found", fullpath)),
-                };
-            } else {
-                return Err(format!("{:?} is not a subtree", fullpath));
+                if let &TreeEntry::SubTree{ ref children } = te {
+                    if let Some(sub) = children.get(path[0]) {
+                        te = sub;
+                        path = &path[1..];
+                    } else {
+                        return Err(format!("{:?} not found", fullpath));
+                    }
+                } else {
+                    return Err(format!("{:?} is not a subtree", fullpath));
+                }
             }
         }
     }
