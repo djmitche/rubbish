@@ -53,6 +53,7 @@ mod tests {
     #[test]
     fn hash_bytes() {
         let hash = Hash::for_bytes(&vec![1u8, 2, 3, 4]);
-        assert_eq!(hash.to_hex(), "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a");
+        assert_eq!(hash.to_hex(),
+                   "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a");
     }
 }

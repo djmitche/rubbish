@@ -7,12 +7,15 @@ use super::TreeEntry;
 #[derive(PartialEq, Debug)]
 pub struct Commit {
     pub root: TreeEntry,
-    pub parents: Vec<Hash>
+    pub parents: Vec<Hash>,
 }
 
 impl Commit {
     pub fn new(root: TreeEntry, parents: Vec<Hash>) -> Commit {
-        Commit{root: root, parents: parents}
+        Commit {
+            root: root,
+            parents: parents,
+        }
     }
 
     // Create a commit with no parents an an empty tree
@@ -48,6 +51,7 @@ mod test {
     #[test]
     fn read_nonexistent() {
         let commit = make_test_commit();
-        assert_eq!(commit.read(&["xxx"]), Err("[\"xxx\"] not found".to_string()));
+        assert_eq!(commit.read(&["xxx"]),
+                   Err("[\"xxx\"] not found".to_string()));
     }
 }

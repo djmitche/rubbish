@@ -6,18 +6,11 @@ use std::collections::HashMap;
 #[derive(RustcDecodable, RustcEncodable)]
 pub enum Object {
     // A commit represents the root of a tree, as evolved from its parents
-    Commit {
-        root: Hash,  // TODO: root
-        parents: Vec<Hash>,
-    },
+    Commit { root: Hash, parents: Vec<Hash> },
 
     // A tree represents a "directory", containing either blobs or more trees
-    Tree {
-        children: HashMap<String, Hash>,
-    },
+    Tree { children: HashMap<String, Hash> },
 
     // A blob represents data (like a file)
-    Blob {
-        data: Vec<u8>,
-    },
+    Blob { data: Vec<u8> },
 }

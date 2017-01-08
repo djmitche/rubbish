@@ -12,15 +12,13 @@ pub struct LocalStorage<T: Encodable + Decodable> {
     map: HashMap<Hash, Content<T>>,
 }
 
-impl <T: Encodable + Decodable> LocalStorage<T> {
+impl<T: Encodable + Decodable> LocalStorage<T> {
     pub fn new() -> LocalStorage<T> {
-        LocalStorage {
-            map: HashMap::new(),
-        }
+        LocalStorage { map: HashMap::new() }
     }
 }
 
-impl <T: Encodable + Decodable> ContentAddressibleStorage<T> for LocalStorage<T> {
+impl<T: Encodable + Decodable> ContentAddressibleStorage<T> for LocalStorage<T> {
     fn store(&mut self, value: &T) -> Hash {
         let (hash, encoded) = Content::encode(value);
         self.map.insert(hash.clone(), encoded);

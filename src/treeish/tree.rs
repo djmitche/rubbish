@@ -7,28 +7,24 @@ use std::result::Result;
 #[derive(PartialEq, Debug)]
 pub enum TreeEntry {
     // TODO: use references to the data in the underlying Object here (need to sort out lifetimes)
-    SubTree {
-        children: HashMap<String, TreeEntry>,
-    },
+    SubTree { children: HashMap<String, TreeEntry>, },
 
-    Blob {
-        data: Vec<u8>,
-    },
+    Blob { data: Vec<u8> },
 }
 
 impl TreeEntry {
     /// Create a new Blob entry, given the bytestring it should contain
     pub fn new_blob(data: Vec<u8>) -> TreeEntry {
-        TreeEntry::Blob{ data: data }
+        TreeEntry::Blob { data: data }
     }
 
     // Create a new, empty Tree entry
     pub fn new_tree() -> TreeEntry {
-        TreeEntry::SubTree{ children: HashMap::new() }
+        TreeEntry::SubTree { children: HashMap::new() }
     }
 
     pub fn add_child(&mut self, name: String, child: TreeEntry) {
-        if let &mut TreeEntry::SubTree{ ref mut children } = self {
+        if let &mut TreeEntry::SubTree { ref mut children } = self {
             if children.contains_key(&name) {
                 panic!("key {} already exists", name);
             }
@@ -44,13 +40,13 @@ impl TreeEntry {
 
         loop {
             if path.len() == 0 {
-                if let &TreeEntry::Blob{ ref data } = te {
+                if let &TreeEntry::Blob { ref data } = te {
                     return Ok(data);
                 } else {
                     return Err(format!("{:?} is not a blob", fullpath));
                 }
             } else {
-                if let &TreeEntry::SubTree{ ref children } = te {
+                if let &TreeEntry::SubTree { ref children } = te {
                     if let Some(sub) = children.get(path[0]) {
                         te = sub;
                         path = &path[1..];
@@ -94,12 +90,14 @@ mod test {
     #[test]
     fn read_not_found() {
         let tree = make_test_tree();
-        assert_eq!(tree.read(&["notathing"]), Err("[\"notathing\"] not found".to_string()));
+        assert_eq!(tree.read(&["notathing"]),
+                   Err("[\"notathing\"] not found".to_string()));
     }
 
     #[test]
     fn read_blob_name_nonterminal() {
         let tree = make_test_tree();
-        assert_eq!(tree.read(&["three", "subtree"]), Err("[\"three\", \"subtree\"] is not a subtree".to_string()));
+        assert_eq!(tree.read(&["three", "subtree"]),
+                   Err("[\"three\", \"subtree\"] is not a subtree".to_string()));
     }
 }

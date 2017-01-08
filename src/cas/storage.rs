@@ -16,16 +16,14 @@ pub struct Storage<T: Encodable + Decodable> {
     map: HashMap<Hash, Content<T>>,
 }
 
-impl <T: Encodable + Decodable> Storage<T> {
+impl<T: Encodable + Decodable> Storage<T> {
     /// Create a new, empty storage pool.
     pub fn new() -> Storage<T> {
-        Storage {
-            map: HashMap::new(),
-        }
+        Storage { map: HashMap::new() }
     }
 }
 
-impl <T: Encodable + Decodable> ContentAddressibleStorage<T> for Storage<T> {
+impl<T: Encodable + Decodable> ContentAddressibleStorage<T> for Storage<T> {
     fn store(&mut self, value: &T) -> Hash {
         let (hash, encoded) = Content::encode(value);
         self.map.insert(hash.clone(), encoded);
