@@ -21,7 +21,7 @@ impl Commit {
     // Create a commit with no parents an an empty tree
     pub fn empty() -> Commit {
         Commit {
-            root: TreeEntry::new_tree(),
+            root: TreeEntry::new(),
             parents: vec![],
         }
     }
@@ -37,8 +37,7 @@ mod test {
     use super::super::TreeEntry;
 
     fn make_test_commit() -> Commit {
-        let mut tree = TreeEntry::new_tree();
-        tree.add_child("six".to_string(), TreeEntry::new_blob(vec![6]));
+        let tree = TreeEntry::new().write(&["six"], vec![6]);
         Commit::new(tree, vec![])
     }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use cas::{Hash, ContentAddressibleStorage};
 use super::commit::Commit;
-use super::tree::TreeEntry;
+use super::tree::Tree;
 use super::object::Object;
 
 pub struct Treeish<C: ContentAddressibleStorage<Object>> {
@@ -13,18 +13,21 @@ impl<C: ContentAddressibleStorage<Object>> Treeish<C> {
         Treeish { storage: storage }
     }
 
-    fn get_tree_entry(&self, hash: &Hash) -> TreeEntry {
+    fn get_tree_entry(&self, hash: &Hash) -> Tree {
         let obj: Object = self.storage.retrieve(hash).unwrap();
         match obj {
-            Object::Tree { children } => {
-                let mut subtree = TreeEntry::new_tree();
-                for (name, hash) in children.iter() {
-                    subtree.add_child(name.clone(), self.get_tree_entry(&hash));
-                }
+            Object::Tree { children: _ } => {
+                // TODO
+                let subtree = Tree::new();
+                // for (name, hash) in children.iter() {
+                // subtree = subtree.write(
+                // subtree.add_child(name.clone(), self.get_tree_entry(&hash));
+                // }
+                //
                 return subtree;
             }
-            Object::Blob { data } => {
-                return TreeEntry::new_blob(data);
+            Object::Blob { data: _ } => {
+                return Tree::new();
             }
             _ => panic!("{:?} is not a tree or a blob", hash),
         };
@@ -40,18 +43,18 @@ impl<C: ContentAddressibleStorage<Object>> Treeish<C> {
         };
     }
 
-    fn add_tree_entry(&mut self, tree_entry: &TreeEntry) -> Hash {
+    fn add_tree_entry(&mut self, tree_entry: &Tree) -> Hash {
         let obj;
         // TODO: optimize by using an existing hash if one is found
         match tree_entry {
-            &TreeEntry::SubTree { ref children } => {
+            &Tree::SubTree { ref children } => {
                 let mut child_objects = HashMap::new();
                 for (name, subtree) in children.iter() {
                     child_objects.insert(name.clone(), self.add_tree_entry(&subtree));
                 }
                 obj = Object::Tree { children: child_objects };
             }
-            &TreeEntry::Blob { ref data } => {
+            &Tree::Blob { ref data } => {
                 obj = Object::Blob { data: data.clone() };
             }
         };
@@ -72,7 +75,7 @@ impl<C: ContentAddressibleStorage<Object>> Treeish<C> {
 #[cfg(test)]
 mod test {
     use super::Treeish;
-    use super::super::{TreeEntry, Commit};
+    use super::super::{Tree, Commit};
     use super::super::object::Object;
     use cas::{LocalStorage, ContentAddressibleStorage, Hash};
     use std::collections::HashMap;
@@ -93,10 +96,10 @@ mod test {
             parents: vec![],
         });
 
-        // create the equivalent TreeEntry
-        let mut tree = TreeEntry::new_tree();
-        tree.add_child("one".to_string(), TreeEntry::new_blob(vec![1]));
-        tree.add_child("two".to_string(), TreeEntry::new_blob(vec![2]));
+        // create the equivalent Tree
+        let tree = Tree::new()
+            .write(&["one"], vec![1])
+            .write(&["two"], vec![2]);
 
         // unpack and verify the commit
         let treeish = Treeish::new(storage);
@@ -134,10 +137,10 @@ mod test {
     fn add_commit() {
         let mut treeish = Treeish::new(LocalStorage::new());
 
-        // create a TreeEntry
-        let mut tree = TreeEntry::new_tree();
-        tree.add_child("one".to_string(), TreeEntry::new_blob(vec![1]));
-        tree.add_child("two".to_string(), TreeEntry::new_blob(vec![2]));
+        // create a Tree
+        let tree = Tree::new()
+            .write(&["one"], vec![1])
+            .write(&["two"], vec![2]);
         let commit = Commit::new(tree, vec![]);
 
         // Add it
