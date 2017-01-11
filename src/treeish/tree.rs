@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::result::Result;
 
+// TODO: use std::borrow::Cow to return maybe-copied stuff
+
 /// A TreeEntry represents a fully-linked tree of data
 #[derive(PartialEq, Debug)]
 pub enum TreeEntry {
