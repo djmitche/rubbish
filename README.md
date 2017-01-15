@@ -34,3 +34,4 @@ The entire application is, of course, a work in progress.
  * Support writing to trees (generates a new tree)
      * path copying - https://github.com/reem/adamantium/blob/master/src/list.rs
  * Use arrays and slices instead of vectors? For byte sequences?
+ * Check that HashMaps have static Hashes
