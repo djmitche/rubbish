@@ -1,7 +1,7 @@
 use fs::Tree;
 use fs::Object;
+use fs::ObjectStorage;
 use cas::Hash;
-use cas::ContentAddressibleStorage;
 
 #[derive(Debug, Clone)]
 enum Parent {
@@ -42,7 +42,7 @@ impl Commit {
     }
 
     /// Get a commit from storage, given its hash
-    pub fn retrieve(storage: &ContentAddressibleStorage<Object>, commit: Hash) -> Result<Commit, String> {
+    pub fn retrieve(storage: &ObjectStorage, commit: Hash) -> Result<Commit, String> {
         if let Some(obj) = storage.retrieve(&commit) {
             if let Object::Commit{tree, parents} = obj {
                 let mut parent_commits = vec![];
@@ -60,7 +60,7 @@ impl Commit {
     }
 
     /// Store this commit and return the hash
-    pub fn store(&self, storage: &mut ContentAddressibleStorage<Object>) -> Hash {
+    pub fn store(&self, storage: &mut ObjectStorage) -> Hash {
         let mut parent_hashes = vec![];
         parent_hashes.reserve(self.parents.len());
         for parent in &self.parents {

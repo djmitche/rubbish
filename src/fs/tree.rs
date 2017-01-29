@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use fs::Object;
+use fs::ObjectStorage;
 use cas::Hash;
-use cas::ContentAddressibleStorage;
 
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
@@ -41,7 +41,7 @@ impl Tree {
         }
     }
 
-    fn store_subtree(storage: &mut ContentAddressibleStorage<Object>, subtree: &SubTree) -> Hash {
+    fn store_subtree(storage: &mut ObjectStorage, subtree: &SubTree) -> Hash {
         match subtree {
             &SubTree::Unresolved(ref hash) => hash.clone(),
             &SubTree::Resolved(ref node) => {
@@ -65,7 +65,7 @@ impl Tree {
     }
 
     /// Store this tree into the given storage, returning its hash.
-    pub fn store(&self, storage: &mut ContentAddressibleStorage<Object>) -> Hash {
+    pub fn store(&self, storage: &mut ObjectStorage) -> Hash {
         Tree::store_subtree(storage, &self.root)
     }
 
@@ -79,7 +79,7 @@ impl Tree {
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write(self, storage: &ContentAddressibleStorage<Object>, 
+    pub fn write(self, storage: &ObjectStorage, 
                  path: &[&str], data: String) -> Result<Tree, String> {
         let resolved: Arc<Node> = try!(self.root.resolve(storage));
 
@@ -123,7 +123,7 @@ impl Tree {
 
     /// Read the value at the given path in this tree, returning an error if this fails.
     /// If no value is set at the given path, that is considered an error.
-    pub fn read(&self, storage: &ContentAddressibleStorage<Object>, path: &[&str]) -> Result<String, String> {
+    pub fn read(&self, storage: &ObjectStorage, path: &[&str]) -> Result<String, String> {
         let mut node = try!(self.root.resolve(storage));
 
         for name in path {
@@ -145,7 +145,7 @@ impl Tree {
 
 impl SubTree {
     /// Resolve this SubTree to an Arc<Node>, retrieving if necessary.
-    fn resolve(&self, storage: &ContentAddressibleStorage<Object>) -> Result<Arc<Node>, String> {
+    fn resolve(&self, storage: &ObjectStorage) -> Result<Arc<Node>, String> {
         match self {
             &SubTree::Unresolved(ref hash) => {
                 if let Some(obj) = storage.retrieve(hash) {
@@ -179,10 +179,10 @@ impl SubTree {
 #[cfg(test)]
 mod test {
     use super::{Tree, SubTree};
-    use fs::Object;
-    use cas::{LocalStorage, ContentAddressibleStorage, Hash};
+    use fs::ObjectStorage;
+    use cas::{LocalStorage, Hash};
 
-    fn make_test_tree(storage: &mut ContentAddressibleStorage<Object>) -> Tree {
+    fn make_test_tree(storage: &mut ObjectStorage) -> Tree {
         Tree::empty()
             .write(storage, &["sub", "one"], "1".to_string()).unwrap()
             .write(storage, &["sub", "two"], "2".to_string()).unwrap()

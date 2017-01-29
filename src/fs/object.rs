@@ -1,5 +1,4 @@
 use cas::Hash;
-use std::collections::HashMap;
 
 /// Objects get encoded into the CAS, but are interlinked with hashes
 /// instead of references.

@@ -23,13 +23,6 @@
 //! println!("{:?}", child.store(&mut storage));
 //! ```
 
-// TEMPORARY
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-
-// TODO: use a type alias for ContentAddressibleStorage<Object>
-
 mod object;
 pub use self::object::Object;
 
@@ -38,3 +31,7 @@ pub use self::commit::Commit;
 
 mod tree;
 pub use self::tree::Tree;
+
+// type alias for brevity
+use cas::ContentAddressibleStorage;
+pub type ObjectStorage = ContentAddressibleStorage<Object>;
