@@ -42,9 +42,18 @@ Finish this application in a non-networked state
 * Build a network interface
 * Teach cas to gossip
 * Teach prax to reach consensus
+* Build a server binary
+
+### Practicality
+
+* Teach cas to journal to disk (use GC generations to control file size)
+* Logging
+* Write a simple command-line client
+* Access control
 
 ### Misc
 
 * Travis
 * Enforce rustfmt
 * Run coverage
+* Rustish docs
