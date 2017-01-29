@@ -2,6 +2,13 @@
 name = "rubbish"
 version = "0.1.0"
 authors = ["Dustin J. Mitchell <dustin@mozilla.com>"]
+readme = "README.md"
+description = "Rubbish is a lock service and low-volume storage service with strong consistency guarantees, designed to provide the basis for loosely-coupled distributed systems."
+license = "MPLv2"
+keywords = ["consensus", "distributed", "lock"]
+documentation = "https://github.com/djmitche/rubbish"
+homepage = "https://github.com/djmitche/rubbish"
+repository = "https://github.com/djmitche/rubbish"
 
 [dependencies]
 rust-crypto = "0.2.36"
