@@ -1,8 +1,6 @@
 //! A Git-like versioned filesystem, based on `cas`.  This includes
 //! the idea of a "commit" with parent commits and a nested tree structure
-//! associated with each commit.  It does not attempt to store a deep history
-//! for the filesystem, instead garbage collecting commits beyond configured
-//! thresholds even if they are part of the active history.
+//! associated with each commit.
 //!
 //! # Examples
 //!

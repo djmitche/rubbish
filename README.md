@@ -14,16 +14,14 @@ The components of the system are as follows:
    all content, and supports generational garbage collection and persistence
    to disk.
 
- * `treeish` -- a Git-like versioned filesystem, based on `cas`.  This includes
+ * `fs` -- a Git-like versioned filesystem, based on `cas`.  This includes
    the idea of a "commit" with parent commits and a nested tree structure
-   associated with each commit.  It does not attempt to store a deep history
-   for the filesystem, instead garbage collecting commits beyond configured
-   thresholds even if they are part of the active history.
+   associated with each commit. 
 
  * `prax` -- a distributed consensus service, designed to vote on the current
    head of the treeish commit tree and to define the current "master" node.
  
- * `rubfs` -- a filesystem-like layer on top of treeish and prax, supporting
+ * `tip` -- a layer on top of treeish and prax, supporting
    remote client operations such as read, write, check-and-swap, and advisory
    locks.  The provided client interface is HTTP.
 
@@ -31,7 +29,19 @@ The entire application is, of course, a work in progress.
 
 ## TODO
 
- * Support writing to trees (generates a new tree)
-     * path copying - https://github.com/reem/adamantium/blob/master/src/list.rs
- * Use arrays and slices instead of vectors? For byte sequences?
- * Check that HashMaps have static Hashes
+### Single-Hosted
+
+Finish this application in a non-networked state
+
+* Implement a `remove` operation in fs
+  * purge empty directories
+* Implement prax API
+* Implement tip HTTP API
+* Implement generational garbage collection between cas and fs
+
+### Distribute
+
+* Build a network interface
+* Teach cas to gossip
+* Teach prax to reach consensus
+
