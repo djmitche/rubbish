@@ -81,6 +81,49 @@ impl Tree {
     /// possible.
     pub fn write(self, storage: &ObjectStorage, 
                  path: &[&str], data: String) -> Result<Tree, String> {
+        self.modify(storage, path, Some(data))
+    }
+
+    /// Return a tree with the value at the given path removed.  Empty directories will
+    /// be removed.  The storage is used to read any unresolvedtree nodes, but nothing is
+    /// written to storage.  If the path is already missing, an unchanged copy of the
+    /// tree is returned.
+    ///
+    /// This operation uses path copying to copy a minimal amount of tree data such that the
+    /// original tree is not modified and a new tree is returned, sharing data where
+    /// possible.
+    pub fn remove(self, storage: &ObjectStorage, 
+                  path: &[&str]) -> Result<Tree, String> {
+        self.modify(storage, path, None)
+    }
+
+    /// Read the value at the given path in this tree, returning an error if this fails.
+    /// If no value is set at the given path, that is considered an error.
+    pub fn read(&self, storage: &ObjectStorage, path: &[&str]) -> Result<String, String> {
+        let mut node = try!(self.root.resolve(storage));
+
+        for name in path {
+            node = match node.children.get(&name.to_string()) {
+                Some(ref subtree) => {
+                    try!(subtree.resolve(storage))
+                },
+                None => {
+                    return Err("path not found".to_string());
+                },
+            }
+        }
+        match node.data {
+            Some(ref value) => Ok(value.clone()),
+            None => Err("path not found".to_string()),
+        }
+    }
+
+    /// Set the data at the given path, returning a new Tree that shares
+    /// some nodes with the original via path copying.
+    /// 
+    /// This prunes empty directories.
+    fn modify(self, storage: &ObjectStorage, 
+                 path: &[&str], data: Option<String>) -> Result<Tree, String> {
         let resolved: Arc<Node> = try!(self.root.resolve(storage));
 
         // first, make a stack of owned nodes, creating or cloning them as necessary
@@ -104,7 +147,7 @@ impl Tree {
 
         // write the data to the leaf node
         let mut leaf = node_stack.pop().unwrap();
-        leaf.data = Some(data);
+        leaf.data = data;
         node_stack.push(leaf);
 
         // finally, stitch the tree back together by modifying nodes back up to the
@@ -112,34 +155,19 @@ impl Tree {
         let mut iter: Node = node_stack.pop().unwrap();
         while node_stack.len() > 0 {
             let mut parent: Node = node_stack.pop().unwrap();
-            parent.children.insert(path[node_stack.len()].to_string(),
-                                   SubTree::Resolved(Arc::new(iter)));
+            let name = path[node_stack.len()].to_string();
+
+            // if iter is empty, omit it from its parent
+            if iter.data == None && iter.children.len() == 0 {
+                parent.children.remove(&name);
+            } else {
+                parent.children.insert(name, SubTree::Resolved(Arc::new(iter)));
+            }
             iter = parent;
         }
 
         // return a new tree, rooted at the final new node
         return Ok(Tree{root: SubTree::Resolved(Arc::new(iter))});
-    }
-
-    /// Read the value at the given path in this tree, returning an error if this fails.
-    /// If no value is set at the given path, that is considered an error.
-    pub fn read(&self, storage: &ObjectStorage, path: &[&str]) -> Result<String, String> {
-        let mut node = try!(self.root.resolve(storage));
-
-        for name in path {
-            node = match node.children.get(&name.to_string()) {
-                Some(ref subtree) => {
-                    try!(subtree.resolve(storage))
-                },
-                None => {
-                    return Err("path not found".to_string());
-                },
-            }
-        }
-        match node.data {
-            Some(ref value) => Ok(value.clone()),
-            None => Err("path not found".to_string()),
-        }
     }
 }
 
@@ -265,6 +293,27 @@ mod test {
         assert_eq!(
             tree.store(&mut storage),
             Hash::from_hex(&"f1e01ab2ce24cc5e686f862dd80eca137d6897f8e23ae63c2c29b349278803cc"));
+    }
+
+    #[test]
+    fn remove_leaf() {
+        let mut storage = LocalStorage::new();
+        let tree = make_test_tree(&mut storage);
+        let tree = tree.remove(&storage, &["sub", "one"]).unwrap();
+        assert_eq!(
+            rep_subtree(&tree.root),
+            "{None; sub: {None; two: {Some(\"2\"); }}, three: {Some(\"3\"); }}");
+    }
+
+    #[test]
+    fn remove_deep_from_storage() {
+        let mut storage = LocalStorage::new();
+        let tree = Tree::empty()
+            .write(&storage, &["a", "b", "c", "d"], "value".to_string()).unwrap();
+        let hash = tree.store(&mut storage);
+        let tree = Tree::for_root(hash);
+        let tree = tree.remove(&storage, &["a", "b", "c", "d"]).unwrap();
+        assert_eq!(rep_subtree(&tree.root), "{None; }");
     }
 
     #[test]

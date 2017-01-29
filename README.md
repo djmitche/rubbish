@@ -33,8 +33,6 @@ The entire application is, of course, a work in progress.
 
 Finish this application in a non-networked state
 
-* Implement a `remove` operation in fs
-  * purge empty directories
 * Implement prax API
 * Implement tip HTTP API
 * Implement generational garbage collection between cas and fs
@@ -45,3 +43,8 @@ Finish this application in a non-networked state
 * Teach cas to gossip
 * Teach prax to reach consensus
 
+### Misc
+
+* Travis
+* Enforce rustfmt
+* Run coverage
