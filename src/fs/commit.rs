@@ -1,11 +1,16 @@
-use super::object::Object;
 use fs::Tree;
+use fs::Object;
 use cas::Hash;
 use cas::ContentAddressibleStorage;
 
+enum Parent {
+    Unresolved(Hash),
+    Resolved(Commit),
+}
+
 pub struct Commit {
     tree: Tree,
-    parents: Vec<Hash>,
+    parents: Vec<Parent>,
 }
 
 impl Commit {
@@ -26,7 +31,12 @@ impl Commit {
     pub fn retrieve(storage: &ContentAddressibleStorage<Object>, commit: Hash) -> Result<Commit, String> {
         if let Some(obj) = storage.retrieve(&commit) {
             if let Object::Commit{tree, parents} = obj {
-                Ok(Commit{tree: Tree::for_root(tree), parents: parents})
+                let mut parent_commits = vec![];
+                parent_commits.reserve(parents.len());
+                for parent_hash in parents {
+                    parent_commits.push(Parent::Unresolved(parent_hash));
+                }
+                Ok(Commit{tree: Tree::for_root(tree), parents: parent_commits})
             } else {
                 Err("not a commit".to_string())
             }
@@ -37,10 +47,24 @@ impl Commit {
 
     /// Store this commit and return the hash
     pub fn store(&self, storage: &mut ContentAddressibleStorage<Object>) -> Hash {
+        let mut parent_hashes = vec![];
+        parent_hashes.reserve(self.parents.len());
+        for parent in &self.parents {
+            match parent {
+                &Parent::Unresolved(ref hash) => {
+                    parent_hashes.push(hash.clone());
+                },
+                &Parent::Resolved(ref commit) => {
+                    parent_hashes.push(commit.store(storage));
+                }
+            }
+        }
+
         let root_hash = self.tree.store(storage);
+
         let obj = Object::Commit {
             tree: root_hash,
-            parents: self.parents.clone(),
+            parents: parent_hashes,
         };
         storage.store(&obj)
     }
