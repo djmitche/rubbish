@@ -151,10 +151,15 @@ impl SubTree {
                 if let Some(obj) = storage.retrieve(hash) {
                     if let Object::Tree{data, children} = obj {
                         let mut childmap = HashMap::new();
-                        // TODO: check that children is sorted
                         for (name, hash) in children {
-                            // TODO: check for duplicates
-                            childmap.insert(name, SubTree::Unresolved(hash));
+                            match childmap.get(&name) {
+                                None => {
+                                    childmap.insert(name, SubTree::Unresolved(hash));
+                                },
+                                _ => {
+                                    return Err("corrupt tree: duplicate child names".to_string());
+                                }
+                            }
                         }
 
                         let node = Node {
