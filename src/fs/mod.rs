@@ -9,13 +9,18 @@
 //! ```
 //! use rubbish::cas::Storage;
 //! use rubbish::fs::Commit;
+//! use rubbish::fs::Tree;
 //! let mut storage = Storage::new();
+//! // fetch the root (empty) commit
 //! let root_commit = Commit::root();
-//! let new_tree = root_commit.tree()
-//!     .write(&storage, &["a", "b"], "some-value".to_string()).unwrap()
-//!     .write(&storage, &["a", "c"], "another-value".to_string()).unwrap();
-//! println!("{:?}", new_tree.store(&mut storage));
-//! // TODO: make a new child commit
+//! // make a child commit with some tree modifications
+//! let child = Commit::root().make_child(&mut |tree: Tree| -> Result<Tree, String> {
+//!     let tree = try!(tree.write(&mut storage, &["x", "y"], "z".to_string()));
+//!     let tree = try!(tree.write(&mut storage, &["x", "z"], "y".to_string()));
+//!     Ok(tree)
+//! }).unwrap();
+//! // store that modified commit
+//! println!("{:?}", child.store(&mut storage));
 //! ```
 
 // TEMPORARY
