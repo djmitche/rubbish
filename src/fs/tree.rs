@@ -18,44 +18,11 @@ struct Node {
     children: HashMap<String, SubTree>,
 }
 
-#[derive(Clone, Debug)] // TOOD: needed?
+#[derive(Clone, Debug)]
 enum SubTree {
     Unresolved(Hash),
     // TODO: Rc might be sufficient
     Resolved(Arc<Node>),
-}
-
-impl SubTree {
-    /// Resolve this SubTree to an Arc<Node>, retrieving if necessary.
-    fn resolve(&self, storage: &ContentAddressibleStorage<Object>) -> Result<Arc<Node>, String> {
-        match self {
-            &SubTree::Unresolved(ref hash) => {
-                if let Some(obj) = storage.retrieve(hash) {
-                    if let Object::Tree{data, children} = obj {
-                        let mut childmap = HashMap::new();
-                        // TODO: check that children is sorted
-                        for (name, hash) in children {
-                            // TODO: check for duplicates
-                            childmap.insert(name, SubTree::Unresolved(hash));
-                        }
-
-                        let node = Node {
-                            data: data,
-                            children: childmap,
-                        };
-                        Ok(Arc::new(node))
-                    } else {
-                        Err("not a tree".to_string())
-                    }
-                } else {
-                    Err("no object with that hash".to_string())
-                }
-            },
-            &SubTree::Resolved(ref node_arc) => {
-                Ok(node_arc.clone())
-            },
-        }
-    }
 }
 
 impl Tree {
@@ -153,149 +120,74 @@ impl Tree {
         // return a new tree, rooted at the final new node
         return Ok(Tree{root: SubTree::Resolved(Arc::new(iter))});
     }
-    /*
 
-    /// Read the value at the given path in this tree, returning an error if this fails,
-    /// such as if no such value has been set.
-    // TODO: Option instead of Result
-    pub fn read(&self, fullpath: &[&str]) -> Result<&Vec<u8>, String> {
-        let mut path = fullpath;
-        let mut tree = self;
+    /// Read the value at the given path in this tree, returning an error if this fails.
+    /// If no value is set at the given path, that is considered an error.
+    pub fn read(&self, storage: &ContentAddressibleStorage<Object>, path: &[&str]) -> Result<String, String> {
+        let mut node = try!(self.root.resolve(storage));
 
-        while path.len() > 0 {
-            if let Some(sub) = tree.children.get(path[0]) {
-                tree = sub;
-            } else {
-                return Err(format!("{:?} not found", fullpath));
+        for name in path {
+            node = match node.children.get(&name.to_string()) {
+                Some(ref subtree) => {
+                    try!(subtree.resolve(storage))
+                },
+                None => {
+                    return Err("path not found".to_string());
+                },
             }
-            path = &path[1..];
         }
-        match tree.data {
-            Some(ref data) => Ok(data),
-            None => Err(format!("{:?} not found", fullpath)),
+        match node.data {
+            Some(ref value) => Ok(value.clone()),
+            None => Err("path not found".to_string()),
         }
     }
-
 }
 
-#[cfg(test)]
-mod test {
-    use super::Tree;
+impl SubTree {
+    /// Resolve this SubTree to an Arc<Node>, retrieving if necessary.
+    fn resolve(&self, storage: &ContentAddressibleStorage<Object>) -> Result<Arc<Node>, String> {
+        match self {
+            &SubTree::Unresolved(ref hash) => {
+                if let Some(obj) = storage.retrieve(hash) {
+                    if let Object::Tree{data, children} = obj {
+                        let mut childmap = HashMap::new();
+                        // TODO: check that children is sorted
+                        for (name, hash) in children {
+                            // TODO: check for duplicates
+                            childmap.insert(name, SubTree::Unresolved(hash));
+                        }
 
-    fn make_test_tree() -> Tree {
-        Tree::new()
-            .write(&["sub", "one"], vec![1])
-            .write(&["sub", "two"], vec![2])
-            .write(&["three"], vec![3])
-    }
-
-    fn rep_tree(tree: &Tree) -> String {
-        match tree {
-            &Tree::Blob { ref data } => format!("{:?}", data),
-            &Tree::SubTree { ref children } => {
-                let mut keys = children.keys().collect::<Vec<&String>>();
-                keys.sort();
-                let reps = keys.iter()
-                    .map(|k| format!("{}: {}", k, rep_tree(&children.get(&k[..]).unwrap())))
-                    .collect::<Vec<String>>();
-                format!("{{{}}}", reps.join(", "))
-            }
+                        let node = Node {
+                            data: data,
+                            children: childmap,
+                        };
+                        Ok(Arc::new(node))
+                    } else {
+                        Err("not a tree".to_string())
+                    }
+                } else {
+                    Err("no object with that hash".to_string())
+                }
+            },
+            &SubTree::Resolved(ref node_arc) => {
+                Ok(node_arc.clone())
+            },
         }
     }
-
-    #[test]
-    fn test_rep_tree() {
-        let tree = make_test_tree();
-        assert_eq!(rep_tree(&tree),
-                   "{sub: {one: [1], two: [2]}, three: [3]}".to_string());
-    }
-
-    #[test]
-    fn read_exists() {
-        let tree = make_test_tree();
-        assert_eq!(tree.read(&["three"]), Ok(&vec![3u8]));
-    }
-
-    #[test]
-    fn read_empty_path() {
-        let tree = make_test_tree();
-        assert_eq!(tree.read(&[]), Err("[] is not a blob".to_string()));
-    }
-
-    #[test]
-    fn read_not_found() {
-        let tree = make_test_tree();
-        assert_eq!(tree.read(&["notathing"]),
-                   Err("[\"notathing\"] not found".to_string()));
-    }
-
-    #[test]
-    fn read_blob_name_nonterminal() {
-        let tree = make_test_tree();
-        assert_eq!(tree.read(&["three", "subtree"]),
-                   Err("[\"three\", \"subtree\"] is not a subtree".to_string()));
-    }
-
-    #[test]
-    fn test_new_tree() {
-        assert_eq!(rep_tree(&Tree::new()), "{}".to_string());
-    }
-
-    #[test]
-    fn test_write_deep() {
-        let tree = Tree::new().write(&["a", "b", "c", "d", "e"], vec![1, 2]);
-        assert_eq!(rep_tree(&tree),
-                   "{a: {b: {c: {d: {e: [1, 2]}}}}}".to_string());
-    }
-
-    #[test]
-    fn test_write_subdir() {
-        let tree = Tree::new()
-            .write(&["a", "b", "x", "y"], vec![7])
-            .write(&["a", "b", "c", "d", "e"], vec![1, 2]);
-        assert_eq!(rep_tree(&tree),
-                   "{a: {b: {c: {d: {e: [1, 2]}}, x: {y: [7]}}}}".to_string());
-    }
-
-    #[test]
-    fn test_write_toplevel() {
-        let tree = Tree::new()
-            .write(&["x", "y"], vec![7])
-            .write(&["a", "b", "c", "d", "e"], vec![1, 2]);
-        assert_eq!(rep_tree(&tree),
-                   "{a: {b: {c: {d: {e: [1, 2]}}}}, x: {y: [7]}}".to_string());
-    }
-
-    #[test]
-    fn test_write_overwrite_blob_with_dir() {
-        let tree = Tree::new()
-            .write(&["x", "y"], vec![7])
-            .write(&["x", "y", "z"], vec![8]);
-        assert_eq!(rep_tree(&tree), "{x: {y: {z: [8]}}}".to_string());
-    }
-
-    #[test]
-    fn test_write_overwrite_dir_with_blob() {
-        let tree = Tree::new()
-            .write(&["x", "y", "z"], vec![8])
-            .write(&["x", "y"], vec![7]);
-        assert_eq!(rep_tree(&tree), "{x: {y: [7]}}".to_string());
-    }
-
-    #[test]
-    fn test_write_overwrite_blob_with_blob() {
-        let tree = Tree::new()
-            .write(&["x", "y"], vec![8])
-            .write(&["x", "y"], vec![7]);
-        assert_eq!(rep_tree(&tree), "{x: {y: [7]}}".to_string());
-    }
-    */
 }
 
 #[cfg(test)]
 mod test {
     use super::{Tree, SubTree};
+    use fs::Object;
     use cas::{LocalStorage, ContentAddressibleStorage, Hash};
+
+    fn make_test_tree(storage: &mut ContentAddressibleStorage<Object>) -> Tree {
+        Tree::empty()
+            .write(storage, &["sub", "one"], "1".to_string()).unwrap()
+            .write(storage, &["sub", "two"], "2".to_string()).unwrap()
+            .write(storage, &["three"], "3".to_string()).unwrap()
+    }
 
     fn rep_subtree(subtree: &SubTree) -> String {
         match subtree {
@@ -309,6 +201,14 @@ mod test {
                 format!("{{{:?}; {}}}", node.data, reps.join(", "))
             }
         }
+    }
+
+    #[test]
+    fn test_rep_subtree() {
+        let mut storage = LocalStorage::new();
+        let tree = make_test_tree(&mut storage);
+        assert_eq!(rep_subtree(&tree.root),
+                   "{None; sub: {None; one: {Some(\"1\"); }, two: {Some(\"2\"); }}, three: {Some(\"3\"); }}".to_string());
     }
 
     #[test]
@@ -360,5 +260,42 @@ mod test {
         assert_eq!(
             tree.store(&mut storage),
             Hash::from_hex(&"f1e01ab2ce24cc5e686f862dd80eca137d6897f8e23ae63c2c29b349278803cc"));
+    }
+
+    #[test]
+    fn read_exists() {
+        let mut storage = LocalStorage::new();
+        let tree = make_test_tree(&mut storage);
+        assert_eq!(tree.read(&storage, &["three"]), Ok("3".to_string()));
+    }
+
+    #[test]
+    fn read_exists_from_storage() {
+        let mut storage = LocalStorage::new();
+        let tree = make_test_tree(&mut storage);
+        let hash = tree.store(&mut storage);
+        let tree = Tree::for_root(hash);
+        assert_eq!(tree.read(&storage, &["sub", "two"]), Ok("2".to_string()));
+    }
+
+    #[test]
+    fn read_empty_path() {
+        let mut storage = LocalStorage::new();
+        let tree = make_test_tree(&mut storage);
+        assert_eq!(tree.read(&storage, &[]), Err("path not found".to_string()));
+    }
+
+    #[test]
+    fn read_not_found() {
+        let mut storage = LocalStorage::new();
+        let tree = make_test_tree(&mut storage);
+        assert_eq!(tree.read(&storage, &["notathing"]), Err("path not found".to_string()));
+    }
+
+    #[test]
+    fn read_blob_name_nonterminal() {
+        let mut storage = LocalStorage::new();
+        let tree = make_test_tree(&mut storage);
+        assert_eq!(tree.read(&storage, &["three", "subtree"]), Err("path not found".to_string()));
     }
 }
