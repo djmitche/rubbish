@@ -27,7 +27,8 @@ impl<T: Encodable + Decodable> ContentAddressibleStorage<T> for Storage<T> {
     fn store(&mut self, value: &T) -> Hash {
         let (hash, encoded) = Content::encode(value);
         self.map.insert(hash.clone(), encoded);
-        // TODO: detect collisions (requires copying encoded?)
+        // note that we assume no hash collisions of encoded values, since this is
+        // not a security-sensitive context
         return hash;
     }
 
