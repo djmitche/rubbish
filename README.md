@@ -33,7 +33,6 @@ The entire application is, of course, a work in progress.
 
 Finish this application in a non-networked state
 
-* Implement prax API
 * Implement tip HTTP API
 * Implement generational garbage collection between cas and fs
 
