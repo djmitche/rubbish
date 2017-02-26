@@ -4,9 +4,9 @@ use super::content::Content;
 use std::collections::HashMap;
 use rustc_serialize::{Decodable, Encodable};
 
-/// Type LocalStorage provides a local content-addressible storage pool.  The content
-/// inserted into the mechanism can be of any type implementing the `rustc_serialize`
-/// traits `Decodable` and `Encodable`.
+/// LocalStorage provides a local content-addressible storage pool.  The content inserted into the
+/// mechanism can be of any type implementing the `rustc_serialize` traits `Decodable` and
+/// `Encodable`.
 #[derive(Debug)]
 pub struct LocalStorage<T: Encodable + Decodable> {
     map: HashMap<Hash, Content<T>>,

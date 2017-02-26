@@ -1,12 +1,12 @@
 use super::hash::Hash;
 
 pub trait ContentAddressibleStorage<T> {
-    /// Insert content into the storage pool, returning the Hash pointing to the content.
+    /// Store a value into the storage pool, returning its hash.
     ///
-    /// Inserting the same content twice will result in the same Hash (and no additional
-    /// use of space).
+    /// Inserting the same value twice will result in the same Hash (and no additional use of
+    /// space).
     fn store(&mut self, value: &T) -> Hash;
 
-    /// Retrieve content by hash.
+    /// Retrieve a value by hash.
     fn retrieve(&self, hash: &Hash) -> Option<T>;
 }
