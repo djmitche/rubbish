@@ -3,12 +3,12 @@
 //! all content, and supports generational garbage collection and persistence
 //! to disk.
 //!
-//! The API is in the `ContentAddressibleStorage` trait.
+//! The API is in the `CAS` trait.
 //!
 //! # Examples
 //!
 //! ```
-//! use rubbish::cas::ContentAddressibleStorage;
+//! use rubbish::cas::CAS;
 //! let mut storage = rubbish::cas::Storage::new();
 //! let hash = storage.store(&42u32);
 //! let result : Option<u32> = storage.retrieve(&hash);
@@ -22,7 +22,7 @@ mod traits;
 
 pub use self::hash::Hash;
 pub use self::storage::Storage;
-pub use self::traits::ContentAddressibleStorage;
+pub use self::traits::CAS;
 
 // LocalStorage is for test use only
 #[cfg(test)]

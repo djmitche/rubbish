@@ -89,7 +89,7 @@ mod test {
     use super::Commit;
     use fs::tree::Tree;
     use fs::Object;
-    use cas::{LocalStorage, ContentAddressibleStorage, Hash};
+    use cas::{LocalStorage, CAS, Hash};
 
     const ROOT_HASH: &'static str = "4e4792b3a91c2cea55575345f94bb20c2d6b8d62a34f7e6099e7fd3a40944836";
 

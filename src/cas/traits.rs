@@ -1,6 +1,6 @@
 use super::hash::Hash;
 
-pub trait ContentAddressibleStorage<T> {
+pub trait CAS<T> {
     /// Store a value into the storage pool, returning its hash.
     ///
     /// Inserting the same value twice will result in the same Hash (and no additional use of

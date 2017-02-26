@@ -31,5 +31,5 @@ mod tree;
 pub use self::tree::Tree;
 
 // type alias for brevity
-use cas::ContentAddressibleStorage;
-pub type ObjectStorage = ContentAddressibleStorage<Object>;
+use cas::CAS;
+pub type ObjectStorage = CAS<Object>;

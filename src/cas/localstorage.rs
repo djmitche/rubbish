@@ -1,5 +1,5 @@
 use super::hash::Hash;
-use super::traits::ContentAddressibleStorage;
+use super::traits::CAS;
 use super::content::Content;
 use std::collections::HashMap;
 use rustc_serialize::{Decodable, Encodable};
@@ -18,7 +18,7 @@ impl<T: Encodable + Decodable> LocalStorage<T> {
     }
 }
 
-impl<T: Encodable + Decodable> ContentAddressibleStorage<T> for LocalStorage<T> {
+impl<T: Encodable + Decodable> CAS<T> for LocalStorage<T> {
     fn store(&mut self, value: &T) -> Hash {
         let (hash, encoded) = Content::encode(value);
         // note that we assume no hash collisions of encoded values, since this is
@@ -39,7 +39,7 @@ impl<T: Encodable + Decodable> ContentAddressibleStorage<T> for LocalStorage<T> 
 mod tests {
     use super::LocalStorage;
     use super::super::hash::Hash;
-    use super::super::traits::ContentAddressibleStorage;
+    use super::super::traits::CAS;
 
     #[test]
     fn put_get_strings() {
