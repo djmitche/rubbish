@@ -1,5 +1,9 @@
 use super::hash::Hash;
 
+/// Content Addressible Storage
+///
+/// When values are stored in this structure, their contents are hashed and the hash
+/// is returned.  The value can later be retrieved by that hash.
 pub trait CAS<T> {
     /// Store a value into the storage pool, returning its hash.
     ///
