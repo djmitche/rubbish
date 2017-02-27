@@ -41,7 +41,7 @@ impl Tree {
         }
     }
 
-    fn store_subtree(storage: &mut CAS<Object>, subtree: &SubTree) -> Hash {
+    fn store_subtree(storage: &CAS<Object>, subtree: &SubTree) -> Hash {
         match subtree {
             &SubTree::Unresolved(ref hash) => hash.clone(),
             &SubTree::Resolved(ref node) => {
@@ -65,7 +65,7 @@ impl Tree {
     }
 
     /// Store this tree into the given storage, returning its hash.
-    pub fn store(&self, storage: &mut CAS<Object>) -> Hash {
+    pub fn store(&self, storage: &CAS<Object>) -> Hash {
         Tree::store_subtree(storage, &self.root)
     }
 
@@ -215,7 +215,7 @@ mod test {
     use fs::Object;
     use cas::{LocalStorage, Hash, CAS};
 
-    fn make_test_tree(storage: &mut CAS<Object>) -> Tree {
+    fn make_test_tree(storage: &CAS<Object>) -> Tree {
         Tree::empty()
             .write(storage, &["sub", "one"], "1".to_string()).unwrap()
             .write(storage, &["sub", "two"], "2".to_string()).unwrap()
@@ -238,35 +238,35 @@ mod test {
 
     #[test]
     fn test_rep_subtree() {
-        let mut storage = LocalStorage::new();
-        let tree = make_test_tree(&mut storage);
+        let storage = LocalStorage::new();
+        let tree = make_test_tree(&storage);
         assert_eq!(rep_subtree(&tree.root),
                    "{None; sub: {None; one: {Some(\"1\"); }, two: {Some(\"2\"); }}, three: {Some(\"3\"); }}".to_string());
     }
 
     #[test]
     fn test_empty() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
         let tree = Tree::empty();
         println!("{}", rep_subtree(&tree.root));
         assert_eq!(
-            tree.store(&mut storage),
+            tree.store(&storage),
             Hash::from_hex(&"387dc3282dea8a6824ddcdafe9f48296118d6ecc20dc5f13bc84ae952510d801"));
     }
 
     #[test]
     fn test_for_root() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
         let tree = Tree::for_root(Hash::from_hex(&"abcdef"));
         println!("{}", rep_subtree(&tree.root));
         assert_eq!(
-            tree.store(&mut storage),
+            tree.store(&storage),
             Hash::from_hex(&"abcdef"));
     }
 
     #[test]
     fn test_write() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
         let tree = Tree::empty()
             .write(&storage, &[], "rt".to_string()).unwrap()
             .write(&storage, &["foo", "bar"], "xyz".to_string()).unwrap()
@@ -277,13 +277,13 @@ mod test {
             rep_subtree(&tree.root),
             "{Some(\"rt\"); foo: {Some(\"short\"); bar: {Some(\"xyz\"); qux: {Some(\"qqq\"); }}, bing: {Some(\"ggg\"); }}}");
         assert_eq!(
-            tree.store(&mut storage),
+            tree.store(&storage),
             Hash::from_hex(&"4dea115efe72d154edf7af8cd9cdd952a556ebd2ea9239f789835003a1abad08"));
     }
 
     #[test]
     fn test_overwrite() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
         let tree = Tree::empty()
             .write(&storage, &["foo", "bar"], "abc".to_string()).unwrap()
             .write(&storage, &["foo", "bar"], "def".to_string()).unwrap();
@@ -291,14 +291,14 @@ mod test {
             rep_subtree(&tree.root),
             "{None; foo: {None; bar: {Some(\"def\"); }}}");
         assert_eq!(
-            tree.store(&mut storage),
+            tree.store(&storage),
             Hash::from_hex(&"f1e01ab2ce24cc5e686f862dd80eca137d6897f8e23ae63c2c29b349278803cc"));
     }
 
     #[test]
     fn remove_leaf() {
-        let mut storage = LocalStorage::new();
-        let tree = make_test_tree(&mut storage);
+        let storage = LocalStorage::new();
+        let tree = make_test_tree(&storage);
         let tree = tree.remove(&storage, &["sub", "one"]).unwrap();
         assert_eq!(
             rep_subtree(&tree.root),
@@ -307,10 +307,10 @@ mod test {
 
     #[test]
     fn remove_deep_from_storage() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
         let tree = Tree::empty()
             .write(&storage, &["a", "b", "c", "d"], "value".to_string()).unwrap();
-        let hash = tree.store(&mut storage);
+        let hash = tree.store(&storage);
         let tree = Tree::for_root(hash);
         let tree = tree.remove(&storage, &["a", "b", "c", "d"]).unwrap();
         assert_eq!(rep_subtree(&tree.root), "{None; }");
@@ -318,38 +318,38 @@ mod test {
 
     #[test]
     fn read_exists() {
-        let mut storage = LocalStorage::new();
-        let tree = make_test_tree(&mut storage);
+        let storage = LocalStorage::new();
+        let tree = make_test_tree(&storage);
         assert_eq!(tree.read(&storage, &["three"]), Ok("3".to_string()));
     }
 
     #[test]
     fn read_exists_from_storage() {
-        let mut storage = LocalStorage::new();
-        let tree = make_test_tree(&mut storage);
-        let hash = tree.store(&mut storage);
+        let storage = LocalStorage::new();
+        let tree = make_test_tree(&storage);
+        let hash = tree.store(&storage);
         let tree = Tree::for_root(hash);
         assert_eq!(tree.read(&storage, &["sub", "two"]), Ok("2".to_string()));
     }
 
     #[test]
     fn read_empty_path() {
-        let mut storage = LocalStorage::new();
-        let tree = make_test_tree(&mut storage);
+        let storage = LocalStorage::new();
+        let tree = make_test_tree(&storage);
         assert_eq!(tree.read(&storage, &[]), Err("path not found".to_string()));
     }
 
     #[test]
     fn read_not_found() {
-        let mut storage = LocalStorage::new();
-        let tree = make_test_tree(&mut storage);
+        let storage = LocalStorage::new();
+        let tree = make_test_tree(&storage);
         assert_eq!(tree.read(&storage, &["notathing"]), Err("path not found".to_string()));
     }
 
     #[test]
     fn read_blob_name_nonterminal() {
-        let mut storage = LocalStorage::new();
-        let tree = make_test_tree(&mut storage);
+        let storage = LocalStorage::new();
+        let tree = make_test_tree(&storage);
         assert_eq!(tree.read(&storage, &["three", "subtree"]), Err("path not found".to_string()));
     }
 }

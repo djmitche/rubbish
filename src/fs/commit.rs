@@ -60,7 +60,7 @@ impl Commit {
     }
 
     /// Store this commit and return the hash
-    pub fn store(&self, storage: &mut CAS<Object>) -> Hash {
+    pub fn store(&self, storage: &CAS<Object>) -> Hash {
         let mut parent_hashes = vec![];
         parent_hashes.reserve(self.parents.len());
         for parent in &self.parents {
@@ -95,23 +95,23 @@ mod test {
 
     #[test]
     fn test_root() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
         assert_eq!(
-            Commit::root().store(&mut storage),
+            Commit::root().store(&storage),
             Hash::from_hex(&ROOT_HASH));
     }
 
     #[test]
     fn test_make_child() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
         let child = Commit::root().make_child(&mut |tree: Tree| -> Result<Tree, String> {
-            let tree = try!(tree.write(&mut storage, &["x", "y"], "Y".to_string()));
-            let tree = try!(tree.write(&mut storage, &["x", "z"], "Z".to_string()));
+            let tree = try!(tree.write(&storage, &["x", "y"], "Y".to_string()));
+            let tree = try!(tree.write(&storage, &["x", "z"], "Z".to_string()));
             Ok(tree)
         }).unwrap();
         println!("child commit: {:?}", child);
 
-        let child_hash = child.store(&mut storage);
+        let child_hash = child.store(&storage);
         println!("child hash: {:?}", child_hash);
 
         // unpack those objects from storage to verify their form..

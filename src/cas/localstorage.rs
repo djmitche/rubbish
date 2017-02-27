@@ -2,6 +2,7 @@ use super::hash::Hash;
 use super::traits::CAS;
 use super::content::Content;
 use std::collections::HashMap;
+use std::cell::RefCell;
 use rustc_serialize::{Decodable, Encodable};
 
 /// LocalStorage provides a local content-addressible storage pool.  The content inserted into the
@@ -9,26 +10,28 @@ use rustc_serialize::{Decodable, Encodable};
 /// `Encodable`.
 #[derive(Debug)]
 pub struct LocalStorage<T: Encodable + Decodable> {
-    map: HashMap<Hash, Content<T>>,
+    map: RefCell<HashMap<Hash, Content<T>>>,
 }
 
 impl<T: Encodable + Decodable> LocalStorage<T> {
     pub fn new() -> LocalStorage<T> {
-        LocalStorage { map: HashMap::new() }
+        LocalStorage {
+            map: RefCell::new(HashMap::new()),
+        }
     }
 }
 
 impl<T: Encodable + Decodable> CAS<T> for LocalStorage<T> {
-    fn store(&mut self, value: &T) -> Hash {
+    fn store(&self, value: &T) -> Hash {
         let (hash, encoded) = Content::encode(value);
         // note that we assume no hash collisions of encoded values, since this is
         // not a security-sensitive context
-        self.map.insert(hash.clone(), encoded);
+        self.map.borrow_mut().insert(hash.clone(), encoded);
         return hash;
     }
 
     fn retrieve(&self, hash: &Hash) -> Option<T> {
-        match self.map.get(hash) {
+        match self.map.borrow().get(hash) {
             None => None,
             Some(encoded) => Some(encoded.decode()),
         }
@@ -43,7 +46,7 @@ mod tests {
 
     #[test]
     fn put_get_strings() {
-        let mut storage = LocalStorage::new();
+        let storage = LocalStorage::new();
 
         let hash1 = storage.store(&"one".to_string());
         let hash2 = storage.store(&"two".to_string());
@@ -56,7 +59,7 @@ mod tests {
 
     #[test]
     fn put_twice() {
-        let mut storage = super::LocalStorage::new();
+        let storage = super::LocalStorage::new();
 
         let hash1 = storage.store(&"xyz".to_string());
         let hash2 = storage.store(&"xyz".to_string());
