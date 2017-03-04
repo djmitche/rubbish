@@ -7,41 +7,68 @@ use cas::CAS;
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
 /// `foo/bar/bing`).
-#[derive(Clone, Debug)]
-pub struct Tree {
-    root: SubTree,
+#[derive(Debug)]
+pub struct Tree<'a, C>
+    where C: 'a + CAS<Object>
+{
+    storage: &'a C,
+    root: SubTree<'a, C>,
 }
 
-#[derive(Clone, Debug)]
-struct Node {
+#[derive(Debug)]
+struct Node<'a, C>
+    where C: 'a + CAS<Object>
+{
+    storage: &'a C,
     data: Option<String>,
-    children: HashMap<String, SubTree>,
+    children: HashMap<String, SubTree<'a, C>>,
 }
 
-#[derive(Clone, Debug)]
-enum SubTree {
+#[derive(Debug)]
+enum SubTree<'a, C>
+    where C: 'a + CAS<Object>
+{
     Unresolved(Hash),
     // TODO: Rc might be sufficient
-    Resolved(Arc<Node>),
+    Resolved(Arc<Node<'a, C>>),
 }
 
-impl Tree {
-    /// Create a new tree with the given root hash
-    pub fn for_root(root: Hash) -> Tree {
+impl<'a, C> Clone for Tree<'a, C>
+    where C: 'a + CAS<Object>
+{
+    fn clone(&self) -> Self {
         Tree {
+            storage: self.storage,
+            root: self.root.clone(),
+        }
+    }
+}
+
+impl<'a, C> Tree<'a, C>
+    where C: 'a + CAS<Object>
+{
+    /// Create a new tree with the given root hash
+    pub fn for_root(storage: &'a C, root: Hash) -> Tree<'a, C> {
+        Tree {
+            storage: storage,
             root: SubTree::Unresolved(root),
         }
     }
 
     /// Create a new, empty tree
-    pub fn empty() -> Tree {
-        let root = SubTree::Resolved(Arc::new(Node{data: None, children: HashMap::new()}));
+    pub fn empty(storage: &'a C) -> Tree<'a, C> {
+        let root = SubTree::Resolved(Arc::new(Node{
+            storage: storage,
+            data: None,
+            children: HashMap::new(),
+        }));
         Tree {
+            storage: storage,
             root: root,
         }
     }
 
-    fn store_subtree(storage: &CAS<Object>, subtree: &SubTree) -> Hash {
+    fn store_subtree(storage: &'a C, subtree: &SubTree<'a, C>) -> Hash {
         match subtree {
             &SubTree::Unresolved(ref hash) => hash.clone(),
             &SubTree::Resolved(ref node) => {
@@ -65,7 +92,7 @@ impl Tree {
     }
 
     /// Store this tree into the given storage, returning its hash.
-    pub fn store(&self, storage: &CAS<Object>) -> Hash {
+    pub fn store(&self, storage: &'a C) -> Hash {
         Tree::store_subtree(storage, &self.root)
     }
 
@@ -79,9 +106,8 @@ impl Tree {
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write(self, storage: &CAS<Object>, 
-                 path: &[&str], data: String) -> Result<Tree, String> {
-        self.modify(storage, path, Some(data))
+    pub fn write<'b>(self, path: &'b [&str], data: String) -> Result<Tree<'a, C>, String> {
+        self.modify(path, Some(data))
     }
 
     /// Return a tree with the value at the given path removed.  Empty directories will
@@ -92,14 +118,13 @@ impl Tree {
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, storage: &CAS<Object>, 
-                  path: &[&str]) -> Result<Tree, String> {
-        self.modify(storage, path, None)
+    pub fn remove(self, path: &[&str]) -> Result<Tree<'a, C>, String> {
+        self.modify(path, None)
     }
 
     /// Read the value at the given path in this tree, returning an error if this fails.
     /// If no value is set at the given path, that is considered an error.
-    pub fn read(&self, storage: &CAS<Object>, path: &[&str]) -> Result<String, String> {
+    pub fn read(&self, storage: &'a C, path: &[&str]) -> Result<String, String> {
         let mut node = try!(self.root.resolve(storage));
 
         for name in path {
@@ -122,23 +147,26 @@ impl Tree {
     /// some nodes with the original via path copying.
     /// 
     /// This prunes empty directories.
-    fn modify(self, storage: &CAS<Object>, 
-                 path: &[&str], data: Option<String>) -> Result<Tree, String> {
-        let resolved: Arc<Node> = try!(self.root.resolve(storage));
+    fn modify(self, path: &[&str], data: Option<String>) -> Result<Tree<'a, C>, String> {
+        let resolved: Arc<Node<'a, C>> = try!(self.root.resolve(self.storage));
 
         // first, make a stack of owned nodes, creating or cloning them as necessary
-        let mut node_stack: Vec<Node> = vec![(*resolved).clone()];
+        let mut node_stack: Vec<Node<'a, C>> = vec![(*resolved).clone()];
         for name in path {
             let new_node = {
-                let node: &Node = node_stack.last().unwrap();
+                let node: &Node<'a, C> = node_stack.last().unwrap();
                 match node.children.get(&name.to_string()) {
                     Some(ref subtree) => {
-                        let resolved = try!(subtree.resolve(storage));
+                        let resolved = try!(subtree.resolve(self.storage));
                         (*resolved).clone()
                     },
                     None => {
                         // push a new, empty node onto the stack
-                        Node{data: None, children: HashMap::new()}
+                        Node{
+                            storage: self.storage,
+                            data: None,
+                            children: HashMap::new(),
+                        }
                     }
                 }
             };
@@ -152,9 +180,9 @@ impl Tree {
 
         // finally, stitch the tree back together by modifying nodes back up to the
         // root
-        let mut iter: Node = node_stack.pop().unwrap();
+        let mut iter: Node<'a, C> = node_stack.pop().unwrap();
         while node_stack.len() > 0 {
-            let mut parent: Node = node_stack.pop().unwrap();
+            let mut parent: Node<'a, C> = node_stack.pop().unwrap();
             let name = path[node_stack.len()].to_string();
 
             // if iter is empty, omit it from its parent
@@ -167,13 +195,41 @@ impl Tree {
         }
 
         // return a new tree, rooted at the final new node
-        return Ok(Tree{root: SubTree::Resolved(Arc::new(iter))});
+        return Ok(Tree{
+            storage: self.storage,
+            root: SubTree::Resolved(Arc::new(iter)),
+        });
     }
 }
 
-impl SubTree {
+impl<'a, C> Clone for Node<'a, C>
+    where C: 'a + CAS<Object>
+{
+    fn clone(&self) -> Self {
+        Node {
+            storage: self.storage,
+            data: self.data.clone(),
+            children: self.children.clone(),
+        }
+    }
+}
+
+impl<'a, C> Clone for SubTree<'a, C>
+    where C: 'a + CAS<Object>
+{
+    fn clone(&self) -> Self {
+        match *self {
+            SubTree::Unresolved(ref h) => SubTree::Unresolved(h.clone()),
+            SubTree::Resolved(ref n) => SubTree::Resolved(n.clone()),
+        }
+    }
+}
+
+impl<'a, C> SubTree<'a, C>
+    where C: 'a + CAS<Object>
+{
     /// Resolve this SubTree to an Arc<Node>, retrieving if necessary.
-    fn resolve(&self, storage: &CAS<Object>) -> Result<Arc<Node>, String> {
+    fn resolve(&self, storage: &'a C) -> Result<Arc<Node<'a, C>>, String> {
         match self {
             &SubTree::Unresolved(ref hash) => {
                 if let Some(obj) = storage.retrieve(hash) {
@@ -191,6 +247,7 @@ impl SubTree {
                         }
 
                         let node = Node {
+                            storage: storage,
                             data: data,
                             children: childmap,
                         };
@@ -215,14 +272,18 @@ mod test {
     use fs::Object;
     use cas::{LocalStorage, Hash, CAS};
 
-    fn make_test_tree(storage: &CAS<Object>) -> Tree {
-        Tree::empty()
-            .write(storage, &["sub", "one"], "1".to_string()).unwrap()
-            .write(storage, &["sub", "two"], "2".to_string()).unwrap()
-            .write(storage, &["three"], "3".to_string()).unwrap()
+    fn make_test_tree<'a, C>(storage: &'a C) -> Tree<'a, C>
+        where C: 'a + CAS<Object>
+    {
+        Tree::empty(storage)
+            .write(&["sub", "one"], "1".to_string()).unwrap()
+            .write(&["sub", "two"], "2".to_string()).unwrap()
+            .write(&["three"], "3".to_string()).unwrap()
     }
 
-    fn rep_subtree(subtree: &SubTree) -> String {
+    fn rep_subtree<'a, C>(subtree: &SubTree<'a, C>) -> String
+        where C: 'a + CAS<Object>
+    {
         match subtree {
             &SubTree::Unresolved(ref hash) => format!("<{}>", hash.to_hex()),
             &SubTree::Resolved(ref node) => {
@@ -247,7 +308,7 @@ mod test {
     #[test]
     fn test_empty() {
         let storage = LocalStorage::new();
-        let tree = Tree::empty();
+        let tree = Tree::empty(&storage);
         println!("{}", rep_subtree(&tree.root));
         assert_eq!(
             tree.store(&storage),
@@ -257,7 +318,7 @@ mod test {
     #[test]
     fn test_for_root() {
         let storage = LocalStorage::new();
-        let tree = Tree::for_root(Hash::from_hex(&"abcdef"));
+        let tree = Tree::for_root(&storage, Hash::from_hex(&"abcdef"));
         println!("{}", rep_subtree(&tree.root));
         assert_eq!(
             tree.store(&storage),
@@ -267,12 +328,12 @@ mod test {
     #[test]
     fn test_write() {
         let storage = LocalStorage::new();
-        let tree = Tree::empty()
-            .write(&storage, &[], "rt".to_string()).unwrap()
-            .write(&storage, &["foo", "bar"], "xyz".to_string()).unwrap()
-            .write(&storage, &["foo", "bing"], "ggg".to_string()).unwrap()
-            .write(&storage, &["foo"], "short".to_string()).unwrap()
-            .write(&storage, &["foo", "bar", "qux"], "qqq".to_string()).unwrap();
+        let tree = Tree::empty(&storage)
+            .write(&[], "rt".to_string()).unwrap()
+            .write(&["foo", "bar"], "xyz".to_string()).unwrap()
+            .write(&["foo", "bing"], "ggg".to_string()).unwrap()
+            .write(&["foo"], "short".to_string()).unwrap()
+            .write(&["foo", "bar", "qux"], "qqq".to_string()).unwrap();
         assert_eq!(
             rep_subtree(&tree.root),
             "{Some(\"rt\"); foo: {Some(\"short\"); bar: {Some(\"xyz\"); qux: {Some(\"qqq\"); }}, bing: {Some(\"ggg\"); }}}");
@@ -284,9 +345,9 @@ mod test {
     #[test]
     fn test_overwrite() {
         let storage = LocalStorage::new();
-        let tree = Tree::empty()
-            .write(&storage, &["foo", "bar"], "abc".to_string()).unwrap()
-            .write(&storage, &["foo", "bar"], "def".to_string()).unwrap();
+        let tree = Tree::empty(&storage)
+            .write(&["foo", "bar"], "abc".to_string()).unwrap()
+            .write(&["foo", "bar"], "def".to_string()).unwrap();
         assert_eq!(
             rep_subtree(&tree.root),
             "{None; foo: {None; bar: {Some(\"def\"); }}}");
@@ -299,7 +360,7 @@ mod test {
     fn remove_leaf() {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
-        let tree = tree.remove(&storage, &["sub", "one"]).unwrap();
+        let tree = tree.remove(&["sub", "one"]).unwrap();
         assert_eq!(
             rep_subtree(&tree.root),
             "{None; sub: {None; two: {Some(\"2\"); }}, three: {Some(\"3\"); }}");
@@ -308,11 +369,11 @@ mod test {
     #[test]
     fn remove_deep_from_storage() {
         let storage = LocalStorage::new();
-        let tree = Tree::empty()
-            .write(&storage, &["a", "b", "c", "d"], "value".to_string()).unwrap();
+        let tree = Tree::empty(&storage)
+            .write(&["a", "b", "c", "d"], "value".to_string()).unwrap();
         let hash = tree.store(&storage);
-        let tree = Tree::for_root(hash);
-        let tree = tree.remove(&storage, &["a", "b", "c", "d"]).unwrap();
+        let tree = Tree::for_root(&storage, hash);
+        let tree = tree.remove(&["a", "b", "c", "d"]).unwrap();
         assert_eq!(rep_subtree(&tree.root), "{None; }");
     }
 
@@ -328,7 +389,7 @@ mod test {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
         let hash = tree.store(&storage);
-        let tree = Tree::for_root(hash);
+        let tree = Tree::for_root(&storage, hash);
         assert_eq!(tree.read(&storage, &["sub", "two"]), Ok("2".to_string()));
     }
 

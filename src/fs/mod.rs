@@ -6,18 +6,20 @@
 //!
 //! ```
 //! use rubbish::cas::Storage;
-//! use rubbish::fs::{FileSystem, FS};
+//! use rubbish::fs::{FileSystem, FS, Object};
 //! use rubbish::fs::Tree;
 //! let mut storage = Storage::new();
 //! let mut fs = FileSystem::new(&storage);
 //! // make a child commit with some tree modifications
-//! let child = fs.root_commit().make_child(&mut |tree: Tree| -> Result<Tree, String> {
-//!     let tree = try!(tree.write(&storage, &["x", "y"], "z".to_string()));
-//!     let tree = try!(tree.write(&storage, &["x", "z"], "y".to_string()));
+//! /*
+//! let child = fs.root_commit().make_child(&mut |tree: Tree<Storage<Object>>| -> Result<Tree<Storage<Object>>, String> {
+//!     let tree = try!(tree.write(&["x", "y"], "z".to_string()));
+//!     let tree = try!(tree.write(&["x", "z"], "y".to_string()));
 //!     Ok(tree)
 //! }).unwrap();
 //! // store that modified commit
 //! println!("{:?}", child.store(&storage));
+//! */
 //! ```
 
 mod object;

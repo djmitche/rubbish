@@ -21,11 +21,13 @@ impl<'a, C> FileSystem<'a, C>
 impl<'a, C> FS for FileSystem<'a, C> 
     where C: 'a + CAS<Object>
 {
-    fn root_commit(&self) -> Commit {
-        Commit::root()
+    type Commit = Commit<'a, C>;
+
+    fn root_commit(&self) -> Self::Commit {
+        Commit::root(self.storage)
     }
 
-    fn get_commit(&self, hash: Hash) -> Result<Commit, String> {
+    fn get_commit(&self, hash: Hash) -> Result<Self::Commit, String> {
         Commit::retrieve(self.storage, hash)
     }
 }
