@@ -1,9 +1,11 @@
 use cas::Hash;
 
+pub trait Commit {
+}
+
 /// A filesystem layered over content-addressible storage.
-pub trait FS
-{
-    type Commit;
+pub trait FS {
+    type Commit: Commit;
     
     // TODO: doc
     fn root_commit(&self) -> Self::Commit;

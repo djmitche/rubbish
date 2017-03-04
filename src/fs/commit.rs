@@ -1,4 +1,5 @@
-use fs::Tree;
+use fs::tree::Tree;
+use fs::traits::Commit;
 use fs::Object;
 use cas::Hash;
 use cas::CAS;
@@ -8,22 +9,22 @@ enum Parent<'a, C>
     where C: 'a + CAS<Object>
 {
     Unresolved(Hash),
-    Resolved(Commit<'a, C>),
+    Resolved(StoredCommit<'a, C>),
 }
 
 #[derive(Debug)]
-pub struct Commit<'a, C: 'a + CAS<Object>> {
+pub struct StoredCommit<'a, C: 'a + CAS<Object>> {
     storage: &'a C,
     tree: Tree<'a, C>,
     parents: Vec<Parent<'a, C>>,
 }
 
 // TODO: quit it with the clonin'
-impl<'a, C> Clone for Commit<'a, C>
+impl<'a, C> Clone for StoredCommit<'a, C>
     where C: 'a + CAS<Object>
 {
     fn clone(&self) -> Self {
-        Commit {
+        StoredCommit {
             storage: self.storage,
             tree: self.tree.clone(),
             parents: self.parents.clone(),
@@ -43,12 +44,17 @@ impl<'a, C> Clone for Parent<'a, C>
     }
 }
 
-impl<'a, C> Commit<'a, C>
+impl<'a, C> Commit for StoredCommit<'a, C>
+    where C: 'a + CAS<Object>
+{
+}
+
+impl<'a, C> StoredCommit<'a, C>
     where C: 'a + CAS<Object>
 {
     /// Create the root commit (no parents, empty tree)
-    pub fn root(storage: &'a C) -> Commit<'a, C> {
-        Commit {
+    pub fn root(storage: &'a C) -> StoredCommit<'a, C> {
+        StoredCommit {
             storage: storage,
             tree: Tree::empty(storage),
             parents: vec![],
@@ -63,10 +69,10 @@ impl<'a, C> Commit<'a, C>
     /// Create a child commit based on this one, applying the modifier function to the enclosed
     /// tree.  This function can call any Tree methods, or even return an entirely unrelated Tree.
     /// If the modifier returns an error, make_child does as well.
-    pub fn make_child<F>(&self, mut modifier: F) -> Result<Commit<'a, C>, String>
+    pub fn make_child<F>(&self, mut modifier: F) -> Result<StoredCommit<'a, C>, String>
         where F: FnMut(Tree<'a, C>) -> Result<Tree<'a, C>, String> {
         let new_tree = try!(modifier(self.tree.clone()));
-        Ok(Commit {
+        Ok(StoredCommit {
             storage: self.storage,
             tree: new_tree,
             parents: vec![Parent::Resolved((*self).clone())],
@@ -74,7 +80,7 @@ impl<'a, C> Commit<'a, C>
     }
 
     /// Get a commit from storage, given its hash
-    pub fn retrieve(storage: &'a C, commit: Hash) -> Result<Commit<'a, C>, String> {
+    pub fn retrieve(storage: &'a C, commit: Hash) -> Result<StoredCommit<'a, C>, String> {
         if let Some(obj) = storage.retrieve(&commit) {
             if let Object::Commit{tree, parents} = obj {
                 let mut parent_commits = vec![];
@@ -82,7 +88,7 @@ impl<'a, C> Commit<'a, C>
                 for parent_hash in parents {
                     parent_commits.push(Parent::Unresolved(parent_hash));
                 }
-                Ok(Commit{
+                Ok(StoredCommit{
                     storage: storage,
                     tree: Tree::for_root(storage, tree),
                     parents: parent_commits,
@@ -122,7 +128,7 @@ impl<'a, C> Commit<'a, C>
 
 #[cfg(test)]
 mod test {
-    use super::Commit;
+    use super::StoredCommit;
     use fs::tree::Tree;
     use fs::Object;
     use cas::{LocalStorage, CAS, Hash};
@@ -133,7 +139,7 @@ mod test {
     fn test_root() {
         let storage = LocalStorage::new();
         assert_eq!(
-            Commit::root(&storage).store(&storage),
+            StoredCommit::root(&storage).store(&storage),
             Hash::from_hex(&ROOT_HASH));
     }
 
@@ -146,7 +152,7 @@ mod test {
             Ok(tree)
         }
 
-        let child = Commit::root(&storage).make_child(mutator).unwrap();
+        let child = StoredCommit::root(&storage).make_child(mutator).unwrap();
         println!("child commit: {:?}", child);
 
         let child_hash = child.store(&storage);

@@ -1,5 +1,5 @@
 use fs::FS;
-use fs::Commit;
+use fs::commit::StoredCommit;
 use fs::Object;
 use cas::Hash;
 use cas::CAS;
@@ -21,13 +21,13 @@ impl<'a, C> FileSystem<'a, C>
 impl<'a, C> FS for FileSystem<'a, C> 
     where C: 'a + CAS<Object>
 {
-    type Commit = Commit<'a, C>;
+    type Commit = StoredCommit<'a, C>;
 
     fn root_commit(&self) -> Self::Commit {
-        Commit::root(self.storage)
+        StoredCommit::root(self.storage)
     }
 
     fn get_commit(&self, hash: Hash) -> Result<Self::Commit, String> {
-        Commit::retrieve(self.storage, hash)
+        StoredCommit::retrieve(self.storage, hash)
     }
 }
