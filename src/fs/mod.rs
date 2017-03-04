@@ -22,12 +22,8 @@
 //! */
 //! ```
 
-mod object;
 mod fs;
-mod commit;
-mod tree;
 mod traits;
 
-pub use self::object::Object;
-pub use self::fs::FileSystem;
+pub use self::fs::{FileSystem, Object};
 pub use self::traits::FS;
