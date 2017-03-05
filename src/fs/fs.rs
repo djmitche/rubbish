@@ -39,7 +39,11 @@ impl<'a, ST> FS for FileSystem<'a, ST>
     type Commit = Commit<'a, ST>;
 
     fn root_commit(&self) -> Self::Commit {
-        Commit::root(self.storage)
+        Commit {
+            storage: self.storage,
+            tree: Tree::empty(self.storage),
+            parents: vec![],
+        }
     }
 
     fn get_commit(&self, hash: Hash) -> Result<Self::Commit, String> {
@@ -386,15 +390,6 @@ impl<'a, ST> CommitTrait for Commit<'a, ST>
 impl<'a, ST> Commit<'a, ST>
     where ST: 'a + CAS<Object>
 {
-    /// Create the root commit (no parents, empty tree)
-    pub fn root(storage: &'a ST) -> Commit<'a, ST> {
-        Commit {
-            storage: storage,
-            tree: Tree::empty(storage),
-            parents: vec![],
-        }
-    }
-
     /// Get the tree at this commit
     pub fn tree(&self) -> Tree<'a, ST> {
         self.tree.clone()
@@ -462,7 +457,8 @@ impl<'a, ST> Commit<'a, ST>
 
 #[cfg(test)]
 mod test {
-    use super::{Commit, Tree, SubTree, Object};
+    use fs::FS;
+    use super::{FileSystem, Commit, Tree, SubTree, Object};
     use cas::{LocalStorage, Hash, CAS};
 
 
@@ -471,21 +467,23 @@ mod test {
     #[test]
     fn test_root() {
         let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
         assert_eq!(
-            Commit::root(&storage).store(&storage),
+            fs.root_commit().store(&storage),
             Hash::from_hex(&ROOT_HASH));
     }
 
     #[test]
     fn test_make_child() {
         let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
         fn mutator<'a>(tree: Tree<'a, LocalStorage<Object>>) -> Result<Tree<'a, LocalStorage<Object>>, String> {
             let tree = try!(tree.write(&["x", "y"], "Y".to_string()));
             let tree = try!(tree.write(&["x", "z"], "Z".to_string()));
             Ok(tree)
         }
 
-        let child = Commit::root(&storage).make_child(mutator).unwrap();
+        let child = fs.root_commit().make_child(mutator).unwrap();
         println!("child commit: {:?}", child);
 
         let child_hash = child.store(&storage);
