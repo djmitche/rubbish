@@ -19,24 +19,24 @@ pub enum Object {
     Tree { data: Option<String>, children: Vec<(String, Hash)> },
 }
 
-pub struct FileSystem<'a, C: 'a + CAS<Object>> {
-    storage: &'a C,
+pub struct FileSystem<'a, ST: 'a + CAS<Object>> {
+    storage: &'a ST,
 }
 
-impl<'a, C> FileSystem<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> FileSystem<'a, ST>
+    where ST: 'a + CAS<Object>
 {
-    pub fn new(storage: &'a C) -> FileSystem<'a, C> {
+    pub fn new(storage: &'a ST) -> FileSystem<'a, ST> {
         FileSystem {
             storage: storage,
         }
     }
 }
 
-impl<'a, C> FS for FileSystem<'a, C> 
-    where C: 'a + CAS<Object>
+impl<'a, ST> FS for FileSystem<'a, ST> 
+    where ST: 'a + CAS<Object>
 {
-    type Commit = Commit<'a, C>;
+    type Commit = Commit<'a, ST>;
 
     fn root_commit(&self) -> Self::Commit {
         Commit::root(self.storage)
@@ -51,33 +51,33 @@ impl<'a, C> FS for FileSystem<'a, C>
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
 /// `foo/bar/bing`).
 #[derive(Debug)]
-pub struct Tree<'a, C>
-    where C: 'a + CAS<Object>
+pub struct Tree<'a, ST>
+    where ST: 'a + CAS<Object>
 {
-    storage: &'a C,
-    root: SubTree<'a, C>,
+    storage: &'a ST,
+    root: SubTree<'a, ST>,
 }
 
 #[derive(Debug)]
-struct Node<'a, C>
-    where C: 'a + CAS<Object>
+struct Node<'a, ST>
+    where ST: 'a + CAS<Object>
 {
-    storage: &'a C,
+    storage: &'a ST,
     data: Option<String>,
-    children: HashMap<String, SubTree<'a, C>>,
+    children: HashMap<String, SubTree<'a, ST>>,
 }
 
 #[derive(Debug)]
-enum SubTree<'a, C>
-    where C: 'a + CAS<Object>
+enum SubTree<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     Unresolved(Hash),
     // TODO: Rc might be sufficient
-    Resolved(Arc<Node<'a, C>>),
+    Resolved(Arc<Node<'a, ST>>),
 }
 
-impl<'a, C> Clone for Tree<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> Clone for Tree<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     fn clone(&self) -> Self {
         Tree {
@@ -87,11 +87,11 @@ impl<'a, C> Clone for Tree<'a, C>
     }
 }
 
-impl<'a, C> Tree<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> Tree<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     /// Create a new tree with the given root hash
-    pub fn for_root(storage: &'a C, root: Hash) -> Tree<'a, C> {
+    pub fn for_root(storage: &'a ST, root: Hash) -> Tree<'a, ST> {
         Tree {
             storage: storage,
             root: SubTree::Unresolved(root),
@@ -99,7 +99,7 @@ impl<'a, C> Tree<'a, C>
     }
 
     /// Create a new, empty tree
-    pub fn empty(storage: &'a C) -> Tree<'a, C> {
+    pub fn empty(storage: &'a ST) -> Tree<'a, ST> {
         let root = SubTree::Resolved(Arc::new(Node{
             storage: storage,
             data: None,
@@ -111,7 +111,7 @@ impl<'a, C> Tree<'a, C>
         }
     }
 
-    fn store_subtree(storage: &'a C, subtree: &SubTree<'a, C>) -> Hash {
+    fn store_subtree(storage: &'a ST, subtree: &SubTree<'a, ST>) -> Hash {
         match subtree {
             &SubTree::Unresolved(ref hash) => hash.clone(),
             &SubTree::Resolved(ref node) => {
@@ -135,7 +135,7 @@ impl<'a, C> Tree<'a, C>
     }
 
     /// Store this tree into the given storage, returning its hash.
-    pub fn store(&self, storage: &'a C) -> Hash {
+    pub fn store(&self, storage: &'a ST) -> Hash {
         Tree::store_subtree(storage, &self.root)
     }
 
@@ -149,7 +149,7 @@ impl<'a, C> Tree<'a, C>
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write<'b>(self, path: &'b [&str], data: String) -> Result<Tree<'a, C>, String> {
+    pub fn write<'b>(self, path: &'b [&str], data: String) -> Result<Tree<'a, ST>, String> {
         self.modify(path, Some(data))
     }
 
@@ -161,13 +161,13 @@ impl<'a, C> Tree<'a, C>
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, path: &[&str]) -> Result<Tree<'a, C>, String> {
+    pub fn remove(self, path: &[&str]) -> Result<Tree<'a, ST>, String> {
         self.modify(path, None)
     }
 
     /// Read the value at the given path in this tree, returning an error if this fails.
     /// If no value is set at the given path, that is considered an error.
-    pub fn read(&self, storage: &'a C, path: &[&str]) -> Result<String, String> {
+    pub fn read(&self, storage: &'a ST, path: &[&str]) -> Result<String, String> {
         let mut node = try!(self.root.resolve(storage));
 
         for name in path {
@@ -190,14 +190,14 @@ impl<'a, C> Tree<'a, C>
     /// some nodes with the original via path copying.
     /// 
     /// This prunes empty directories.
-    fn modify(self, path: &[&str], data: Option<String>) -> Result<Tree<'a, C>, String> {
-        let resolved: Arc<Node<'a, C>> = try!(self.root.resolve(self.storage));
+    fn modify(self, path: &[&str], data: Option<String>) -> Result<Tree<'a, ST>, String> {
+        let resolved: Arc<Node<'a, ST>> = try!(self.root.resolve(self.storage));
 
         // first, make a stack of owned nodes, creating or cloning them as necessary
-        let mut node_stack: Vec<Node<'a, C>> = vec![(*resolved).clone()];
+        let mut node_stack: Vec<Node<'a, ST>> = vec![(*resolved).clone()];
         for name in path {
             let new_node = {
-                let node: &Node<'a, C> = node_stack.last().unwrap();
+                let node: &Node<'a, ST> = node_stack.last().unwrap();
                 match node.children.get(&name.to_string()) {
                     Some(ref subtree) => {
                         let resolved = try!(subtree.resolve(self.storage));
@@ -223,9 +223,9 @@ impl<'a, C> Tree<'a, C>
 
         // finally, stitch the tree back together by modifying nodes back up to the
         // root
-        let mut iter: Node<'a, C> = node_stack.pop().unwrap();
+        let mut iter: Node<'a, ST> = node_stack.pop().unwrap();
         while node_stack.len() > 0 {
-            let mut parent: Node<'a, C> = node_stack.pop().unwrap();
+            let mut parent: Node<'a, ST> = node_stack.pop().unwrap();
             let name = path[node_stack.len()].to_string();
 
             // if iter is empty, omit it from its parent
@@ -245,8 +245,8 @@ impl<'a, C> Tree<'a, C>
     }
 }
 
-impl<'a, C> Clone for Node<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> Clone for Node<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     fn clone(&self) -> Self {
         Node {
@@ -257,8 +257,8 @@ impl<'a, C> Clone for Node<'a, C>
     }
 }
 
-impl<'a, C> Clone for SubTree<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> Clone for SubTree<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     fn clone(&self) -> Self {
         match *self {
@@ -268,11 +268,11 @@ impl<'a, C> Clone for SubTree<'a, C>
     }
 }
 
-impl<'a, C> SubTree<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> SubTree<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     /// Resolve this SubTree to an Arc<Node>, retrieving if necessary.
-    fn resolve(&self, storage: &'a C) -> Result<Arc<Node<'a, C>>, String> {
+    fn resolve(&self, storage: &'a ST) -> Result<Arc<Node<'a, ST>>, String> {
         match self {
             &SubTree::Unresolved(ref hash) => {
                 if let Some(obj) = storage.retrieve(hash) {
@@ -310,44 +310,44 @@ impl<'a, C> SubTree<'a, C>
 }
 
 #[derive(Debug)]
-enum Parent<'a, C>
-    where C: 'a + CAS<Object>
+enum Parent<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     Unresolved(Hash),
-    Resolved(Commit<'a, C>),
+    Resolved(Commit<'a, ST>),
 }
 
-pub struct CommitUpdater<'a, C: 'a + CAS<Object>>{
+pub struct CommitUpdater<'a, ST: 'a + CAS<Object>>{
     // TODO: actually implement
-    commit: Commit<'a, C>,
+    commit: Commit<'a, ST>,
 }
 
-impl<'a, C> CommitUpdaterTrait for CommitUpdater<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> CommitUpdaterTrait for CommitUpdater<'a, ST>
+    where ST: 'a + CAS<Object>
 {
-    type Commit = Commit<'a, C>;
+    type Commit = Commit<'a, ST>;
 
     fn write(&mut self, path: &[&str], data: String) -> &mut Self {
         // TODO: write
         self
     }
 
-    fn commit(self) -> Commit<'a, C> {
+    fn commit(self) -> Commit<'a, ST> {
         // TODO: write
         self.commit
     }
 }
 
 #[derive(Debug)]
-pub struct Commit<'a, C: 'a + CAS<Object>> {
-    storage: &'a C,
-    tree: Tree<'a, C>,
-    parents: Vec<Parent<'a, C>>,
+pub struct Commit<'a, ST: 'a + CAS<Object>> {
+    storage: &'a ST,
+    tree: Tree<'a, ST>,
+    parents: Vec<Parent<'a, ST>>,
 }
 
 // TODO: quit it with the clonin'
-impl<'a, C> Clone for Commit<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> Clone for Commit<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     fn clone(&self) -> Self {
         Commit {
@@ -359,8 +359,8 @@ impl<'a, C> Clone for Commit<'a, C>
 }
 
 // TODO: quit it with the clonin'
-impl<'a, C> Clone for Parent<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> Clone for Parent<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     fn clone(&self) -> Self {
         match *self {
@@ -370,12 +370,12 @@ impl<'a, C> Clone for Parent<'a, C>
     }
 }
 
-impl<'a, C> CommitTrait for Commit<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> CommitTrait for Commit<'a, ST>
+    where ST: 'a + CAS<Object>
 {
-    type CommitUpdater = CommitUpdater<'a, C>;
+    type CommitUpdater = CommitUpdater<'a, ST>;
 
-    fn update(&self) -> CommitUpdater<'a, C> {
+    fn update(&self) -> CommitUpdater<'a, ST> {
         // TODO: write
         CommitUpdater{
             commit: self.clone(),
@@ -383,11 +383,11 @@ impl<'a, C> CommitTrait for Commit<'a, C>
     }
 }
 
-impl<'a, C> Commit<'a, C>
-    where C: 'a + CAS<Object>
+impl<'a, ST> Commit<'a, ST>
+    where ST: 'a + CAS<Object>
 {
     /// Create the root commit (no parents, empty tree)
-    pub fn root(storage: &'a C) -> Commit<'a, C> {
+    pub fn root(storage: &'a ST) -> Commit<'a, ST> {
         Commit {
             storage: storage,
             tree: Tree::empty(storage),
@@ -396,15 +396,15 @@ impl<'a, C> Commit<'a, C>
     }
 
     /// Get the tree at this commit
-    pub fn tree(&self) -> Tree<'a, C> {
+    pub fn tree(&self) -> Tree<'a, ST> {
         self.tree.clone()
     }
 
     /// Create a child commit based on this one, applying the modifier function to the enclosed
     /// tree.  This function can call any Tree methods, or even return an entirely unrelated Tree.
     /// If the modifier returns an error, make_child does as well.
-    pub fn make_child<F>(&self, mut modifier: F) -> Result<Commit<'a, C>, String>
-        where F: FnMut(Tree<'a, C>) -> Result<Tree<'a, C>, String> {
+    pub fn make_child<F>(&self, mut modifier: F) -> Result<Commit<'a, ST>, String>
+        where F: FnMut(Tree<'a, ST>) -> Result<Tree<'a, ST>, String> {
         let new_tree = try!(modifier(self.tree.clone()));
         Ok(Commit {
             storage: self.storage,
@@ -414,7 +414,7 @@ impl<'a, C> Commit<'a, C>
     }
 
     /// Get a commit from storage, given its hash
-    pub fn retrieve(storage: &'a C, commit: Hash) -> Result<Commit<'a, C>, String> {
+    pub fn retrieve(storage: &'a ST, commit: Hash) -> Result<Commit<'a, ST>, String> {
         if let Some(obj) = storage.retrieve(&commit) {
             if let Object::Commit{tree, parents} = obj {
                 let mut parent_commits = vec![];
@@ -436,7 +436,7 @@ impl<'a, C> Commit<'a, C>
     }
 
     /// Store this commit and return the hash
-    pub fn store(&self, storage: &C) -> Hash {
+    pub fn store(&self, storage: &ST) -> Hash {
         let mut parent_hashes = vec![];
         parent_hashes.reserve(self.parents.len());
         for parent in &self.parents {
@@ -549,8 +549,8 @@ mod test {
         assert_eq!(children.len(), 0);
     }
 
-    fn make_test_tree<'a, C>(storage: &'a C) -> Tree<'a, C>
-        where C: 'a + CAS<Object>
+    fn make_test_tree<'a, ST>(storage: &'a ST) -> Tree<'a, ST>
+        where ST: 'a + CAS<Object>
     {
         Tree::empty(storage)
             .write(&["sub", "one"], "1".to_string()).unwrap()
@@ -558,8 +558,8 @@ mod test {
             .write(&["three"], "3".to_string()).unwrap()
     }
 
-    fn rep_subtree<'a, C>(subtree: &SubTree<'a, C>) -> String
-        where C: 'a + CAS<Object>
+    fn rep_subtree<'a, ST>(subtree: &SubTree<'a, ST>) -> String
+        where ST: 'a + CAS<Object>
     {
         match subtree {
             &SubTree::Unresolved(ref hash) => format!("<{}>", hash.to_hex()),
