@@ -139,8 +139,8 @@ impl<'a, ST> Tree<'a, ST>
     }
 
     /// Store this tree into the given storage, returning its hash.
-    pub fn store(&self, storage: &'a ST) -> Hash {
-        Tree::store_subtree(storage, &self.root)
+    pub fn store(&self) -> Hash {
+        Tree::store_subtree(self.storage, &self.root)
     }
 
     /// Return a tree containing new value at the designated path, replacing any
@@ -171,13 +171,13 @@ impl<'a, ST> Tree<'a, ST>
 
     /// Read the value at the given path in this tree, returning an error if this fails.
     /// If no value is set at the given path, that is considered an error.
-    pub fn read(&self, storage: &'a ST, path: &[&str]) -> Result<String, String> {
-        let mut node = try!(self.root.resolve(storage));
+    pub fn read(&self, path: &[&str]) -> Result<String, String> {
+        let mut node = try!(self.root.resolve(self.storage));
 
         for name in path {
             node = match node.children.get(&name.to_string()) {
                 Some(ref subtree) => {
-                    try!(subtree.resolve(storage))
+                    try!(subtree.resolve(self.storage))
                 },
                 None => {
                     return Err("path not found".to_string());
@@ -431,7 +431,7 @@ impl<'a, ST> Commit<'a, ST>
     }
 
     /// Store this commit and return the hash
-    pub fn store(&self, storage: &ST) -> Hash {
+    pub fn store(&self) -> Hash {
         let mut parent_hashes = vec![];
         parent_hashes.reserve(self.parents.len());
         for parent in &self.parents {
@@ -440,25 +440,25 @@ impl<'a, ST> Commit<'a, ST>
                     parent_hashes.push(hash.clone());
                 },
                 &Parent::Resolved(ref commit) => {
-                    parent_hashes.push(commit.store(storage));
+                    parent_hashes.push(commit.store());
                 }
             }
         }
 
-        let tree_hash = self.tree.store(storage);
+        let tree_hash = self.tree.store();
 
         let obj = Object::Commit {
             tree: tree_hash,
             parents: parent_hashes,
         };
-        storage.store(&obj)
+        self.storage.store(&obj)
     }
 }
 
 #[cfg(test)]
 mod test {
     use fs::FS;
-    use super::{FileSystem, Commit, Tree, SubTree, Object};
+    use super::{FileSystem, Tree, SubTree, Object};
     use cas::{LocalStorage, Hash, CAS};
 
 
@@ -469,7 +469,7 @@ mod test {
         let storage = LocalStorage::new();
         let fs = FileSystem::new(&storage);
         assert_eq!(
-            fs.root_commit().store(&storage),
+            fs.root_commit().store(),
             Hash::from_hex(&ROOT_HASH));
     }
 
@@ -486,7 +486,7 @@ mod test {
         let child = fs.root_commit().make_child(mutator).unwrap();
         println!("child commit: {:?}", child);
 
-        let child_hash = child.store(&storage);
+        let child_hash = child.store();
         println!("child hash: {:?}", child_hash);
 
         // unpack those objects from storage to verify their form..
@@ -586,7 +586,7 @@ mod test {
         let tree = Tree::empty(&storage);
         println!("{}", rep_subtree(&tree.root));
         assert_eq!(
-            tree.store(&storage),
+            tree.store(),
             Hash::from_hex(&"387dc3282dea8a6824ddcdafe9f48296118d6ecc20dc5f13bc84ae952510d801"));
     }
 
@@ -596,7 +596,7 @@ mod test {
         let tree = Tree::for_root(&storage, Hash::from_hex(&"abcdef"));
         println!("{}", rep_subtree(&tree.root));
         assert_eq!(
-            tree.store(&storage),
+            tree.store(),
             Hash::from_hex(&"abcdef"));
     }
 
@@ -613,7 +613,7 @@ mod test {
             rep_subtree(&tree.root),
             "{Some(\"rt\"); foo: {Some(\"short\"); bar: {Some(\"xyz\"); qux: {Some(\"qqq\"); }}, bing: {Some(\"ggg\"); }}}");
         assert_eq!(
-            tree.store(&storage),
+            tree.store(),
             Hash::from_hex(&"4dea115efe72d154edf7af8cd9cdd952a556ebd2ea9239f789835003a1abad08"));
     }
 
@@ -627,7 +627,7 @@ mod test {
             rep_subtree(&tree.root),
             "{None; foo: {None; bar: {Some(\"def\"); }}}");
         assert_eq!(
-            tree.store(&storage),
+            tree.store(),
             Hash::from_hex(&"f1e01ab2ce24cc5e686f862dd80eca137d6897f8e23ae63c2c29b349278803cc"));
     }
 
@@ -646,7 +646,7 @@ mod test {
         let storage = LocalStorage::new();
         let tree = Tree::empty(&storage)
             .write(&["a", "b", "c", "d"], "value".to_string()).unwrap();
-        let hash = tree.store(&storage);
+        let hash = tree.store();
         let tree = Tree::for_root(&storage, hash);
         let tree = tree.remove(&["a", "b", "c", "d"]).unwrap();
         assert_eq!(rep_subtree(&tree.root), "{None; }");
@@ -656,36 +656,36 @@ mod test {
     fn read_exists() {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
-        assert_eq!(tree.read(&storage, &["three"]), Ok("3".to_string()));
+        assert_eq!(tree.read(&["three"]), Ok("3".to_string()));
     }
 
     #[test]
     fn read_exists_from_storage() {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
-        let hash = tree.store(&storage);
+        let hash = tree.store();
         let tree = Tree::for_root(&storage, hash);
-        assert_eq!(tree.read(&storage, &["sub", "two"]), Ok("2".to_string()));
+        assert_eq!(tree.read(&["sub", "two"]), Ok("2".to_string()));
     }
 
     #[test]
     fn read_empty_path() {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
-        assert_eq!(tree.read(&storage, &[]), Err("path not found".to_string()));
+        assert_eq!(tree.read(&[]), Err("path not found".to_string()));
     }
 
     #[test]
     fn read_not_found() {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
-        assert_eq!(tree.read(&storage, &["notathing"]), Err("path not found".to_string()));
+        assert_eq!(tree.read(&["notathing"]), Err("path not found".to_string()));
     }
 
     #[test]
     fn read_blob_name_nonterminal() {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
-        assert_eq!(tree.read(&storage, &["three", "subtree"]), Err("path not found".to_string()));
+        assert_eq!(tree.read(&["three", "subtree"]), Err("path not found".to_string()));
     }
 }
