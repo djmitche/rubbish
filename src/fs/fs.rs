@@ -153,7 +153,7 @@ impl<'a, ST> Tree<'a, ST>
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write<'b>(self, path: &'b [&str], data: String) -> Result<Tree<'a, ST>, String> {
+    pub fn write<'b>(&self, path: &'b [&str], data: String) -> Result<Tree<'a, ST>, String> {
         self.modify(path, Some(data))
     }
 
@@ -165,7 +165,7 @@ impl<'a, ST> Tree<'a, ST>
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, path: &[&str]) -> Result<Tree<'a, ST>, String> {
+    pub fn remove(&self, path: &[&str]) -> Result<Tree<'a, ST>, String> {
         self.modify(path, None)
     }
 
@@ -194,7 +194,7 @@ impl<'a, ST> Tree<'a, ST>
     /// some nodes with the original via path copying.
     /// 
     /// This prunes empty directories.
-    fn modify(self, path: &[&str], data: Option<String>) -> Result<Tree<'a, ST>, String> {
+    fn modify(&self, path: &[&str], data: Option<String>) -> Result<Tree<'a, ST>, String> {
         let resolved: Arc<Node<'a, ST>> = try!(self.root.resolve(self.storage));
 
         // first, make a stack of owned nodes, creating or cloning them as necessary
@@ -322,8 +322,8 @@ enum Parent<'a, ST>
 }
 
 pub struct CommitUpdater<'a, ST: 'a + CAS<Object>>{
-    // TODO: actually implement
-    commit: Commit<'a, ST>,
+    parent: Commit<'a, ST>,
+    tree: Tree<'a, ST>,
 }
 
 impl<'a, ST> CommitUpdaterTrait for CommitUpdater<'a, ST>
@@ -332,13 +332,16 @@ impl<'a, ST> CommitUpdaterTrait for CommitUpdater<'a, ST>
     type Commit = Commit<'a, ST>;
 
     fn write(&mut self, path: &[&str], data: String) -> &mut Self {
-        // TODO: write
+        self.tree = self.tree.write(path, data).unwrap(); // TODO: keep errors until end
         self
     }
 
-    fn commit(self) -> Commit<'a, ST> {
-        // TODO: write
-        self.commit
+    fn commit(&self) -> Commit<'a, ST> {
+        Commit {
+            storage: self.parent.storage,
+            tree: self.tree.clone(),
+            parents: vec![Parent::Resolved(self.parent.clone())],
+        }
     }
 }
 
@@ -380,9 +383,9 @@ impl<'a, ST> CommitTrait for Commit<'a, ST>
     type CommitUpdater = CommitUpdater<'a, ST>;
 
     fn update(&self) -> CommitUpdater<'a, ST> {
-        // TODO: write
         CommitUpdater{
-            commit: self.clone(),
+            parent: self.clone(),
+            tree: self.tree.clone(),
         }
     }
 }

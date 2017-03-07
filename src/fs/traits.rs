@@ -15,7 +15,7 @@ pub trait CommitUpdater {
     // TODO: remove
     // TODO: read
 
-    fn commit(self) -> Self::Commit;
+    fn commit(&self) -> Self::Commit;
 }
 
 pub trait Commit {
