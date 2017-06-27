@@ -5,6 +5,11 @@
 //!
 //! The API is in the `CAS` trait.
 //!
+//! # TODO
+//!
+//!  * Content::encode should just be Content::new, with a hash method
+//!  * Don't require CAS<T>, using Any
+//!
 //! # Examples
 //!
 //! ```

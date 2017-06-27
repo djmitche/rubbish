@@ -20,9 +20,7 @@ pub struct Storage<T: Encodable + Decodable> {
 impl<T: Encodable + Decodable> Storage<T> {
     /// Create a new, empty storage pool.
     pub fn new() -> Storage<T> {
-        Storage {
-            map: RefCell::new(HashMap::new()),
-        }
+        Storage { map: RefCell::new(HashMap::new()) }
     }
 }
 

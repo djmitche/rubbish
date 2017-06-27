@@ -15,9 +15,7 @@ pub struct LocalStorage<T: Encodable + Decodable> {
 
 impl<T: Encodable + Decodable> LocalStorage<T> {
     pub fn new() -> LocalStorage<T> {
-        LocalStorage {
-            map: RefCell::new(HashMap::new()),
-        }
+        LocalStorage { map: RefCell::new(HashMap::new()) }
     }
 }
 
