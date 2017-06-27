@@ -8,6 +8,8 @@
 //! # TODO
 //!
 //!  * Don't require CAS<T>, using Any
+//!  * Be threadsafe
+//!  * More tests (with threads, etc.)
 //!
 //! # Examples
 //!
@@ -30,6 +32,4 @@ pub use self::traits::CAS;
 
 // LocalStorage is for test use only
 #[cfg(test)]
-mod localstorage;
-#[cfg(test)]
-pub use self::localstorage::LocalStorage;
+pub use self::storage::Storage as LocalStorage;
