@@ -10,5 +10,8 @@ pub enum Object {
     /// A tree represents a "directory", containing more trees; children
     /// are (name, hash_of_value) pairs, ordered by name, with duplicate
     /// names forbidden.
-    Tree { data: Option<String>, children: Vec<(String, Hash)> },
+    Tree {
+        data: Option<String>,
+        children: Vec<(String, Hash)>,
+    },
 }

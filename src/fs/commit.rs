@@ -79,7 +79,7 @@ impl<'a, C> StoredCommit<'a, C>
 
     /// Get a commit from storage, given its hash
     pub fn retrieve(storage: &'a C, commit: Hash) -> Result<StoredCommit<'a, C>, String> {
-        if let Some(obj) = storage.retrieve(&commit) {
+        if let Ok(obj) = storage.retrieve(&commit) {
             if let Object::Commit { tree, parents } = obj {
                 let mut parent_commits = vec![];
                 parent_commits.reserve(parents.len());
@@ -95,6 +95,7 @@ impl<'a, C> StoredCommit<'a, C>
                 Err("not a commit".to_string())
             }
         } else {
+            // TODO: pass up error
             Err("no object with that hash".to_string())
         }
     }

@@ -16,8 +16,8 @@
 //! use rubbish::cas::CAS;
 //! let mut storage = rubbish::cas::Storage::new();
 //! let hash = storage.store(&42u32);
-//! let result : Option<u32> = storage.retrieve(&hash);
-//! assert_eq!(result, Some(42u32));
+//! let result: u32 = storage.retrieve(&hash).unwrap();
+//! assert_eq!(result, 42u32);
 //! ```
 
 mod hash;
@@ -28,6 +28,9 @@ mod traits;
 pub use self::hash::Hash;
 pub use self::storage::Storage;
 pub use self::traits::CAS;
+
+mod error;
+pub use self::error::*;
 
 // LocalStorage is for test use only
 #[cfg(test)]

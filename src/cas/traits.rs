@@ -1,3 +1,4 @@
+use cas::error::*;
 use super::hash::Hash;
 use rustc_serialize::{Decodable, Encodable};
 
@@ -16,5 +17,5 @@ pub trait CAS {
     fn store<T: Encodable + Decodable>(&self, value: &T) -> Hash;
 
     /// Retrieve a value by hash.
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Option<T>;
+    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T>;
 }

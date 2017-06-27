@@ -42,7 +42,7 @@
 
 use std::marker::PhantomData;
 
-pub trait DistributedState<C> : Sized {
+pub trait DistributedState<C>: Sized {
     /// Apply the given state change to this state, either returning a new state if applicable,
     /// or None to indicate that the change is not applicable.
     fn update(&self, change: C) -> Option<Self>;
@@ -57,9 +57,11 @@ impl<S, C> Prax<S, C>
     where S: DistributedState<C> + Clone
 {
     /// Create a new Prax instance, beginning with the given state
-    pub fn new(state: S) -> Prax<S, C>
-    {
-        Prax{state: state, _phantom: PhantomData}
+    pub fn new(state: S) -> Prax<S, C> {
+        Prax {
+            state: state,
+            _phantom: PhantomData,
+        }
     }
 
     /// Update the state by applying the given change.
@@ -71,8 +73,8 @@ impl<S, C> Prax<S, C>
             Some(new) => {
                 self.state = new;
                 true
-            },
-            None => false
+            }
+            None => false,
         }
     }
 

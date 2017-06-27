@@ -1,4 +1,5 @@
 use super::hash::Hash;
+use cas::error::*;
 use rustc_serialize::{Decodable, Encodable};
 use bincode::SizeLimit;
 use bincode::rustc_serialize::{encode, decode};
@@ -17,8 +18,8 @@ impl Content {
         Hash::for_bytes(&self.0)
     }
 
-    pub fn decode<T: Encodable + Decodable>(&self) -> T {
-        decode(&self.0).unwrap()
+    pub fn decode<T: Encodable + Decodable>(&self) -> Result<T> {
+        decode(&self.0).chain_err(|| "Error decoding object")
     }
 }
 
@@ -38,7 +39,9 @@ mod tests {
 
     #[test]
     fn decode_content_abcd() {
-        assert_eq!(Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100]).decode::<String>(),
+        assert_eq!(Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100])
+                       .decode::<String>()
+                       .unwrap(),
                    "abcd".to_string());
     }
 }

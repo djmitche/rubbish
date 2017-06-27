@@ -232,7 +232,7 @@ impl<'a, C> SubTree<'a, C>
     fn resolve(&self, storage: &'a C) -> Result<Arc<Node<'a, C>>, String> {
         match self {
             &SubTree::Unresolved(ref hash) => {
-                if let Some(obj) = storage.retrieve(hash) {
+                if let Ok(obj) = storage.retrieve(hash) {
                     if let Object::Tree { data, children } = obj {
                         let mut childmap = HashMap::new();
                         for (name, hash) in children {
@@ -256,6 +256,7 @@ impl<'a, C> SubTree<'a, C>
                         Err("not a tree".to_string())
                     }
                 } else {
+                    // TODO: pass on error
                     Err("no object with that hash".to_string())
                 }
             }

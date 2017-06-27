@@ -1,3 +1,4 @@
+use cas::error::*;
 use super::hash::Hash;
 use super::traits::CAS;
 use super::content::Content;
@@ -34,10 +35,10 @@ impl CAS for Storage {
         return hash;
     }
 
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Option<T> {
+    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T> {
         match self.map.borrow().get(hash) {
-            None => None,
-            Some(encoded) => Some(encoded.decode()),
+            None => bail!("No object found"),
+            Some(encoded) => Ok(encoded.decode()?),
         }
     }
 }
@@ -56,9 +57,11 @@ mod tests {
         let hash2 = storage.store(&"two".to_string());
         let badhash = Hash::from_hex("000000");
 
-        assert_eq!(storage.retrieve(&hash1), Some("one".to_string()));
-        assert_eq!(storage.retrieve(&hash2), Some("two".to_string()));
-        assert_eq!(storage.retrieve(&badhash), None as Option<String>);
+        assert_eq!(storage.retrieve::<String>(&hash1).unwrap(),
+                   "one".to_string());
+        assert_eq!(storage.retrieve::<String>(&hash2).unwrap(),
+                   "two".to_string());
+        assert!(storage.retrieve::<String>(&badhash).is_err());
     }
 
     #[test]
