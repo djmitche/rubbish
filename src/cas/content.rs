@@ -2,23 +2,22 @@ use super::hash::Hash;
 use rustc_serialize::{Decodable, Encodable};
 use bincode::SizeLimit;
 use bincode::rustc_serialize::{encode, decode};
-use std::marker::PhantomData;
 
 /// Type Content represents the encoded version of the caller's data.
 #[derive(Debug, PartialEq)]
-pub struct Content<T: Encodable + Decodable>(Vec<u8>, PhantomData<T>);
+pub struct Content(Vec<u8>);
 
-impl<T: Encodable + Decodable> Content<T> {
-    pub fn new(value: &T) -> Content<T> {
+impl Content {
+    pub fn new<T: Encodable + Decodable>(value: &T) -> Content {
         let encoded = encode(value, SizeLimit::Infinite).unwrap();
-        Content(encoded, PhantomData)
+        Content(encoded)
     }
 
     pub fn hash(&self) -> Hash {
         Hash::for_bytes(&self.0)
     }
 
-    pub fn decode(&self) -> T {
+    pub fn decode<T: Encodable + Decodable>(&self) -> T {
         decode(&self.0).unwrap()
     }
 }
@@ -26,7 +25,6 @@ impl<T: Encodable + Decodable> Content<T> {
 #[cfg(test)]
 mod tests {
     use super::Content;
-    use std::marker::PhantomData;
 
     #[test]
     fn encode() {
@@ -35,13 +33,12 @@ mod tests {
         assert_eq!(hash.to_hex(),
                    "9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841");
         assert_eq!(content,
-                   Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100], PhantomData));
+                   Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100]));
     }
 
     #[test]
     fn decode_content_abcd() {
-        assert_eq!(Content::<String>(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100], PhantomData)
-                       .decode(),
+        assert_eq!(Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100]).decode::<String>(),
                    "abcd".to_string());
     }
 }

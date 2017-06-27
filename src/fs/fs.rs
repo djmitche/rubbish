@@ -1,25 +1,22 @@
 use fs::FS;
 use fs::commit::StoredCommit;
-use fs::Object;
 use cas::Hash;
 use cas::CAS;
 
-pub struct FileSystem<'a, C: 'a + CAS<Object>> {
+pub struct FileSystem<'a, C: 'a + CAS> {
     storage: &'a C,
 }
 
 impl<'a, C> FileSystem<'a, C>
-    where C: 'a + CAS<Object>
+    where C: 'a + CAS
 {
     pub fn new(storage: &'a C) -> FileSystem<'a, C> {
-        FileSystem {
-            storage: storage,
-        }
+        FileSystem { storage: storage }
     }
 }
 
-impl<'a, C> FS for FileSystem<'a, C> 
-    where C: 'a + CAS<Object>
+impl<'a, C> FS for FileSystem<'a, C>
+    where C: 'a + CAS
 {
     type Commit = StoredCommit<'a, C>;
 

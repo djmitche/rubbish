@@ -13,19 +13,19 @@ use rustc_serialize::{Decodable, Encodable};
 ///
 /// * Actually be distributed
 #[derive(Debug)]
-pub struct Storage<T: Encodable + Decodable> {
-    map: RefCell<HashMap<Hash, Content<T>>>,
+pub struct Storage {
+    map: RefCell<HashMap<Hash, Content>>,
 }
 
-impl<T: Encodable + Decodable> Storage<T> {
+impl Storage {
     /// Create a new, empty storage pool.
-    pub fn new() -> Storage<T> {
+    pub fn new() -> Storage {
         Storage { map: RefCell::new(HashMap::new()) }
     }
 }
 
-impl<T: Encodable + Decodable> CAS<T> for Storage<T> {
-    fn store(&self, value: &T) -> Hash {
+impl CAS for Storage {
+    fn store<T: Encodable + Decodable>(&self, value: &T) -> Hash {
         let content = Content::new(value);
         let hash = content.hash();
         self.map.borrow_mut().insert(hash.clone(), content);
@@ -34,7 +34,7 @@ impl<T: Encodable + Decodable> CAS<T> for Storage<T> {
         return hash;
     }
 
-    fn retrieve(&self, hash: &Hash) -> Option<T> {
+    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Option<T> {
         match self.map.borrow().get(hash) {
             None => None,
             Some(encoded) => Some(encoded.decode()),
@@ -58,7 +58,7 @@ mod tests {
 
         assert_eq!(storage.retrieve(&hash1), Some("one".to_string()));
         assert_eq!(storage.retrieve(&hash2), Some("two".to_string()));
-        assert_eq!(storage.retrieve(&badhash), None);
+        assert_eq!(storage.retrieve(&badhash), None as Option<String>);
     }
 
     #[test]

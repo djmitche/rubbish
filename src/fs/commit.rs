@@ -6,14 +6,14 @@ use cas::CAS;
 
 #[derive(Debug)]
 enum Parent<'a, C>
-    where C: 'a + CAS<Object>
+    where C: 'a + CAS
 {
     Unresolved(Hash),
     Resolved(StoredCommit<'a, C>),
 }
 
 #[derive(Debug)]
-pub struct StoredCommit<'a, C: 'a + CAS<Object>> {
+pub struct StoredCommit<'a, C: 'a + CAS> {
     storage: &'a C,
     tree: Tree<'a, C>,
     parents: Vec<Parent<'a, C>>,
@@ -21,7 +21,7 @@ pub struct StoredCommit<'a, C: 'a + CAS<Object>> {
 
 // TODO: quit it with the clonin'
 impl<'a, C> Clone for StoredCommit<'a, C>
-    where C: 'a + CAS<Object>
+    where C: 'a + CAS
 {
     fn clone(&self) -> Self {
         StoredCommit {
@@ -34,7 +34,7 @@ impl<'a, C> Clone for StoredCommit<'a, C>
 
 // TODO: quit it with the clonin'
 impl<'a, C> Clone for Parent<'a, C>
-    where C: 'a + CAS<Object>
+    where C: 'a + CAS
 {
     fn clone(&self) -> Self {
         match *self {
@@ -44,13 +44,10 @@ impl<'a, C> Clone for Parent<'a, C>
     }
 }
 
-impl<'a, C> Commit for StoredCommit<'a, C>
-    where C: 'a + CAS<Object>
-{
-}
+impl<'a, C> Commit for StoredCommit<'a, C> where C: 'a + CAS {}
 
 impl<'a, C> StoredCommit<'a, C>
-    where C: 'a + CAS<Object>
+    where C: 'a + CAS
 {
     /// Create the root commit (no parents, empty tree)
     pub fn root(storage: &'a C) -> StoredCommit<'a, C> {
@@ -70,29 +67,30 @@ impl<'a, C> StoredCommit<'a, C>
     /// tree.  This function can call any Tree methods, or even return an entirely unrelated Tree.
     /// If the modifier returns an error, make_child does as well.
     pub fn make_child<F>(&self, mut modifier: F) -> Result<StoredCommit<'a, C>, String>
-        where F: FnMut(Tree<'a, C>) -> Result<Tree<'a, C>, String> {
+        where F: FnMut(Tree<'a, C>) -> Result<Tree<'a, C>, String>
+    {
         let new_tree = try!(modifier(self.tree.clone()));
         Ok(StoredCommit {
-            storage: self.storage,
-            tree: new_tree,
-            parents: vec![Parent::Resolved((*self).clone())],
-        })
+               storage: self.storage,
+               tree: new_tree,
+               parents: vec![Parent::Resolved((*self).clone())],
+           })
     }
 
     /// Get a commit from storage, given its hash
     pub fn retrieve(storage: &'a C, commit: Hash) -> Result<StoredCommit<'a, C>, String> {
         if let Some(obj) = storage.retrieve(&commit) {
-            if let Object::Commit{tree, parents} = obj {
+            if let Object::Commit { tree, parents } = obj {
                 let mut parent_commits = vec![];
                 parent_commits.reserve(parents.len());
                 for parent_hash in parents {
                     parent_commits.push(Parent::Unresolved(parent_hash));
                 }
-                Ok(StoredCommit{
-                    storage: storage,
-                    tree: Tree::for_root(storage, tree),
-                    parents: parent_commits,
-                })
+                Ok(StoredCommit {
+                       storage: storage,
+                       tree: Tree::for_root(storage, tree),
+                       parents: parent_commits,
+                   })
             } else {
                 Err("not a commit".to_string())
             }
@@ -109,7 +107,7 @@ impl<'a, C> StoredCommit<'a, C>
             match parent {
                 &Parent::Unresolved(ref hash) => {
                     parent_hashes.push(hash.clone());
-                },
+                }
                 &Parent::Resolved(ref commit) => {
                     parent_hashes.push(commit.store(storage));
                 }
@@ -138,15 +136,14 @@ mod test {
     #[test]
     fn test_root() {
         let storage = LocalStorage::new();
-        assert_eq!(
-            StoredCommit::root(&storage).store(&storage),
-            Hash::from_hex(&ROOT_HASH));
+        assert_eq!(StoredCommit::root(&storage).store(&storage),
+                   Hash::from_hex(&ROOT_HASH));
     }
 
     #[test]
     fn test_make_child() {
         let storage = LocalStorage::new();
-        fn mutator<'a>(tree: Tree<'a, LocalStorage<Object>>) -> Result<Tree<'a, LocalStorage<Object>>, String> {
+        fn mutator<'a>(tree: Tree<'a, LocalStorage>) -> Result<Tree<'a, LocalStorage>, String> {
             let tree = try!(tree.write(&["x", "y"], "Y".to_string()));
             let tree = try!(tree.write(&["x", "z"], "Z".to_string()));
             Ok(tree)
@@ -164,7 +161,7 @@ mod test {
         let child_obj = storage.retrieve(&child_hash).unwrap();
         println!("child object: {:?} = {:?}", child_hash, child_obj);
         let (tree_hash, parents) = match child_obj {
-            Object::Commit{tree, parents} => (tree, parents),
+            Object::Commit { tree, parents } => (tree, parents),
             _ => panic!("not a commit"),
         };
 
@@ -174,7 +171,7 @@ mod test {
         let tree_obj = storage.retrieve(&tree_hash).unwrap();
         println!("tree object: {:?} = {:?}", tree_hash, tree_obj);
         let (data, children) = match tree_obj {
-            Object::Tree{data, children} => (data, children),
+            Object::Tree { data, children } => (data, children),
             _ => panic!("not a tree"),
         };
 
@@ -186,7 +183,7 @@ mod test {
         let tree_obj = storage.retrieve(&child_hash_x).unwrap();
         println!("tree object: {:?} = {:?}", child_hash_x, tree_obj);
         let (data, children) = match tree_obj {
-            Object::Tree{data, children} => (data, children),
+            Object::Tree { data, children } => (data, children),
             _ => panic!("not a tree"),
         };
 
@@ -200,7 +197,7 @@ mod test {
         let tree_obj = storage.retrieve(&child_hash_y).unwrap();
         println!("tree object: {:?} = {:?}", child_hash_y, tree_obj);
         let (data, children) = match tree_obj {
-            Object::Tree{data, children} => (data, children),
+            Object::Tree { data, children } => (data, children),
             _ => panic!("not a tree"),
         };
         assert_eq!(data, Some("Y".to_string()));
@@ -209,7 +206,7 @@ mod test {
         let tree_obj = storage.retrieve(&child_hash_z).unwrap();
         println!("tree object: {:?} = {:?}", child_hash_z, tree_obj);
         let (data, children) = match tree_obj {
-            Object::Tree{data, children} => (data, children),
+            Object::Tree { data, children } => (data, children),
             _ => panic!("not a tree"),
         };
         assert_eq!(data, Some("Z".to_string()));

@@ -7,7 +7,6 @@
 //!
 //! # TODO
 //!
-//!  * Don't require CAS<T>, using Any
 //!  * Be threadsafe
 //!  * More tests (with threads, etc.)
 //!
