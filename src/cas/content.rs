@@ -9,10 +9,13 @@ use std::marker::PhantomData;
 pub struct Content<T: Encodable + Decodable>(Vec<u8>, PhantomData<T>);
 
 impl<T: Encodable + Decodable> Content<T> {
-    pub fn encode(value: &T) -> (Hash, Content<T>) {
+    pub fn new(value: &T) -> Content<T> {
         let encoded = encode(value, SizeLimit::Infinite).unwrap();
-        let hash = Hash::for_bytes(&encoded);
-        return (hash, Content(encoded, PhantomData));
+        Content(encoded, PhantomData)
+    }
+
+    pub fn hash(&self) -> Hash {
+        Hash::for_bytes(&self.0)
     }
 
     pub fn decode(&self) -> T {
@@ -27,10 +30,11 @@ mod tests {
 
     #[test]
     fn encode() {
-        let (hash, encoded) = Content::encode(&"abcd".to_string());
+        let content = Content::new(&"abcd".to_string());
+        let hash = content.hash();
         assert_eq!(hash.to_hex(),
                    "9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841");
-        assert_eq!(encoded,
+        assert_eq!(content,
                    Content(vec![0u8, 0, 0, 0, 0, 0, 0, 4, 97, 98, 99, 100], PhantomData));
     }
 

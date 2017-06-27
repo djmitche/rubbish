@@ -21,10 +21,11 @@ impl<T: Encodable + Decodable> LocalStorage<T> {
 
 impl<T: Encodable + Decodable> CAS<T> for LocalStorage<T> {
     fn store(&self, value: &T) -> Hash {
-        let (hash, encoded) = Content::encode(value);
+        let content = Content::new(value);
+        let hash = content.hash();
         // note that we assume no hash collisions of encoded values, since this is
         // not a security-sensitive context
-        self.map.borrow_mut().insert(hash.clone(), encoded);
+        self.map.borrow_mut().insert(hash.clone(), content);
         return hash;
     }
 

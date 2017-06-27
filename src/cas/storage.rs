@@ -26,8 +26,9 @@ impl<T: Encodable + Decodable> Storage<T> {
 
 impl<T: Encodable + Decodable> CAS<T> for Storage<T> {
     fn store(&self, value: &T) -> Hash {
-        let (hash, encoded) = Content::encode(value);
-        self.map.borrow_mut().insert(hash.clone(), encoded);
+        let content = Content::new(value);
+        let hash = content.hash();
+        self.map.borrow_mut().insert(hash.clone(), content);
         // note that we assume no hash collisions of encoded values, since this is
         // not a security-sensitive context
         return hash;
