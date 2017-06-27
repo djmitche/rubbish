@@ -18,7 +18,6 @@
 //!
 //! # TODO
 //!
-//!  * Be threadsafe
 //!  * Use Serde instead of rustc_serialize
 //!
 //! # Examples
@@ -36,24 +35,31 @@
 //! assert_eq!(storage.retrieve::<String>(&hash314).unwrap(), "π".to_string());
 //! ```
 //!
-//! An example with a custom type:
+//! An example with a custom type, and using Arc to refer to Storage from multiple
+//! threads:
 //!
 //! ```
 //! extern crate rustc_serialize;
 //! extern crate rubbish;
 //!
-//! use rubbish::cas::CAS;
+//! use std::sync::Arc;
+//! use std::thread;
+//! use rubbish::cas::{CAS, Storage};
 //! use rustc_serialize::{Decodable, Encodable};
 //!
 //! #[derive(Debug, RustcEncodable, RustcDecodable, PartialEq)]
 //! struct Data(u32, u32);
 //!
 //! fn main() {
-//!   let mut storage = rubbish::cas::Storage::new();
+//!   let mut storage = Arc::new(Storage::new());
 //!
-//!   let hash = storage.store(&Data(10, 20)).unwrap();
-//!   let result: Data = storage.retrieve(&hash).unwrap();
-//!   assert_eq!(result, Data(10, 20));
+//!   let thd = thread::spawn(move || {
+//!     let hash = storage.store(&Data(10, 20)).unwrap();
+//!     let result: Data = storage.retrieve(&hash).unwrap();
+//!     assert_eq!(result, Data(10, 20));
+//!   });
+//!
+//!   thd.join().unwrap();
 //! }
 //! ```
 
