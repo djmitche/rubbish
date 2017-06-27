@@ -1,4 +1,4 @@
-use cas::Result as CasResult;
+use fs::error::*;
 use fs::tree::Tree;
 use fs::traits::Commit;
 use fs::Object;
@@ -67,8 +67,8 @@ impl<'a, C> StoredCommit<'a, C>
     /// Create a child commit based on this one, applying the modifier function to the enclosed
     /// tree.  This function can call any Tree methods, or even return an entirely unrelated Tree.
     /// If the modifier returns an error, make_child does as well.
-    pub fn make_child<F>(&self, mut modifier: F) -> Result<StoredCommit<'a, C>, String>
-        where F: FnMut(Tree<'a, C>) -> Result<Tree<'a, C>, String>
+    pub fn make_child<F>(&self, mut modifier: F) -> Result<StoredCommit<'a, C>>
+        where F: FnMut(Tree<'a, C>) -> Result<Tree<'a, C>>
     {
         let new_tree = try!(modifier(self.tree.clone()));
         Ok(StoredCommit {
@@ -79,7 +79,7 @@ impl<'a, C> StoredCommit<'a, C>
     }
 
     /// Get a commit from storage, given its hash
-    pub fn retrieve(storage: &'a C, commit: Hash) -> Result<StoredCommit<'a, C>, String> {
+    pub fn retrieve(storage: &'a C, commit: Hash) -> Result<StoredCommit<'a, C>> {
         if let Ok(obj) = storage.retrieve(&commit) {
             if let Object::Commit { tree, parents } = obj {
                 let mut parent_commits = vec![];
@@ -93,16 +93,16 @@ impl<'a, C> StoredCommit<'a, C>
                        parents: parent_commits,
                    })
             } else {
-                Err("not a commit".to_string())
+                bail!("not a commit");
             }
         } else {
             // TODO: pass up error
-            Err("no object with that hash".to_string())
+            bail!("no object with that hash");
         }
     }
 
     /// Store this commit and return the hash
-    pub fn store(&self, storage: &C) -> CasResult<Hash> {
+    pub fn store(&self, storage: &C) -> Result<Hash> {
         let mut parent_hashes = vec![];
         parent_hashes.reserve(self.parents.len());
         for parent in &self.parents {
@@ -122,12 +122,13 @@ impl<'a, C> StoredCommit<'a, C>
             tree: tree_hash,
             parents: parent_hashes,
         };
-        storage.store(&obj)
+        Ok(storage.store(&obj)?)
     }
 }
 
 #[cfg(test)]
 mod test {
+    use fs::error::*;
     use super::StoredCommit;
     use fs::tree::Tree;
     use fs::Object;
@@ -145,7 +146,7 @@ mod test {
     #[test]
     fn test_make_child() {
         let storage = LocalStorage::new();
-        fn mutator<'a>(tree: Tree<'a, LocalStorage>) -> Result<Tree<'a, LocalStorage>, String> {
+        fn mutator<'a>(tree: Tree<'a, LocalStorage>) -> Result<Tree<'a, LocalStorage>> {
             let tree = try!(tree.write(&["x", "y"], "Y".to_string()));
             let tree = try!(tree.write(&["x", "z"], "Z".to_string()));
             Ok(tree)

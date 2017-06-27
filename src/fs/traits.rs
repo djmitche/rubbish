@@ -1,3 +1,4 @@
+use fs::error::*;
 use cas::Hash;
 
 pub trait Commit {}
@@ -8,5 +9,5 @@ pub trait FS {
 
     // TODO: doc
     fn root_commit(&self) -> Self::Commit;
-    fn get_commit(&self, hash: Hash) -> Result<Self::Commit, String>;
+    fn get_commit(&self, hash: Hash) -> Result<Self::Commit>;
 }

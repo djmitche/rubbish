@@ -1,3 +1,4 @@
+use fs::error::*;
 use fs::FS;
 use fs::commit::StoredCommit;
 use cas::Hash;
@@ -24,7 +25,7 @@ impl<'a, C> FS for FileSystem<'a, C>
         StoredCommit::root(self.storage)
     }
 
-    fn get_commit(&self, hash: Hash) -> Result<Self::Commit, String> {
+    fn get_commit(&self, hash: Hash) -> Result<Self::Commit> {
         StoredCommit::retrieve(self.storage, hash)
     }
 }
