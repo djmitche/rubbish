@@ -1,3 +1,4 @@
+use cas::Result as CasResult;
 use fs::tree::Tree;
 use fs::traits::Commit;
 use fs::Object;
@@ -101,7 +102,7 @@ impl<'a, C> StoredCommit<'a, C>
     }
 
     /// Store this commit and return the hash
-    pub fn store(&self, storage: &C) -> Hash {
+    pub fn store(&self, storage: &C) -> CasResult<Hash> {
         let mut parent_hashes = vec![];
         parent_hashes.reserve(self.parents.len());
         for parent in &self.parents {
@@ -110,12 +111,12 @@ impl<'a, C> StoredCommit<'a, C>
                     parent_hashes.push(hash.clone());
                 }
                 &Parent::Resolved(ref commit) => {
-                    parent_hashes.push(commit.store(storage));
+                    parent_hashes.push(commit.store(storage)?);
                 }
             }
         }
 
-        let tree_hash = self.tree.store(storage);
+        let tree_hash = self.tree.store(storage)?;
 
         let obj = Object::Commit {
             tree: tree_hash,
@@ -137,7 +138,7 @@ mod test {
     #[test]
     fn test_root() {
         let storage = LocalStorage::new();
-        assert_eq!(StoredCommit::root(&storage).store(&storage),
+        assert_eq!(StoredCommit::root(&storage).store(&storage).unwrap(),
                    Hash::from_hex(&ROOT_HASH));
     }
 
@@ -153,7 +154,7 @@ mod test {
         let child = StoredCommit::root(&storage).make_child(mutator).unwrap();
         println!("child commit: {:?}", child);
 
-        let child_hash = child.store(&storage);
+        let child_hash = child.store(&storage).unwrap();
         println!("child hash: {:?}", child_hash);
 
         // unpack those objects from storage to verify their form..

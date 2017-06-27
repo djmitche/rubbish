@@ -14,7 +14,7 @@ pub trait CAS {
     ///
     /// Inserting the same value twice will result in the same Hash (and no additional use of
     /// space).
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Hash;
+    fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash>;
 
     /// Retrieve a value by hash.
     fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T>;

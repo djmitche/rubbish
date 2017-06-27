@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use fs::Object;
 use cas::Hash;
+use cas::Result as CasResult;
 use cas::CAS;
 
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
@@ -68,9 +69,9 @@ impl<'a, C> Tree<'a, C>
         }
     }
 
-    fn store_subtree(storage: &'a C, subtree: &SubTree<'a, C>) -> Hash {
+    fn store_subtree(storage: &'a C, subtree: &SubTree<'a, C>) -> CasResult<Hash> {
         match subtree {
-            &SubTree::Unresolved(ref hash) => hash.clone(),
+            &SubTree::Unresolved(ref hash) => Ok(hash.clone()),
             &SubTree::Resolved(ref node) => {
                 let mut children = vec![];
                 let mut keys = node.children.keys().collect::<Vec<&String>>();
@@ -79,7 +80,7 @@ impl<'a, C> Tree<'a, C>
 
                 for name in keys {
                     let subtree = node.children.get(name).unwrap();
-                    children.push((name.clone(), Tree::store_subtree(storage, &subtree)));
+                    children.push((name.clone(), Tree::store_subtree(storage, &subtree)?));
                 }
 
                 let obj = Object::Tree {
@@ -92,7 +93,7 @@ impl<'a, C> Tree<'a, C>
     }
 
     /// Store this tree into the given storage, returning its hash.
-    pub fn store(&self, storage: &'a C) -> Hash {
+    pub fn store(&self, storage: &'a C) -> CasResult<Hash> {
         Tree::store_subtree(storage, &self.root)
     }
 
@@ -315,7 +316,7 @@ mod test {
         let storage = LocalStorage::new();
         let tree = Tree::empty(&storage);
         println!("{}", rep_subtree(&tree.root));
-        assert_eq!(tree.store(&storage),
+        assert_eq!(tree.store(&storage).unwrap(),
                    Hash::from_hex(&"387dc3282dea8a6824ddcdafe9f48296118d6ecc20dc5f13bc84ae952510d801"));
     }
 
@@ -324,7 +325,7 @@ mod test {
         let storage = LocalStorage::new();
         let tree = Tree::for_root(&storage, Hash::from_hex(&"abcdef"));
         println!("{}", rep_subtree(&tree.root));
-        assert_eq!(tree.store(&storage), Hash::from_hex(&"abcdef"));
+        assert_eq!(tree.store(&storage).unwrap(), Hash::from_hex(&"abcdef"));
     }
 
     #[test]
@@ -343,7 +344,7 @@ mod test {
             .unwrap();
         assert_eq!(rep_subtree(&tree.root),
                    "{Some(\"rt\"); foo: {Some(\"short\"); bar: {Some(\"xyz\"); qux: {Some(\"qqq\"); }}, bing: {Some(\"ggg\"); }}}");
-        assert_eq!(tree.store(&storage),
+        assert_eq!(tree.store(&storage).unwrap(),
                    Hash::from_hex(&"4dea115efe72d154edf7af8cd9cdd952a556ebd2ea9239f789835003a1abad08"));
     }
 
@@ -357,7 +358,7 @@ mod test {
             .unwrap();
         assert_eq!(rep_subtree(&tree.root),
                    "{None; foo: {None; bar: {Some(\"def\"); }}}");
-        assert_eq!(tree.store(&storage),
+        assert_eq!(tree.store(&storage).unwrap(),
                    Hash::from_hex(&"f1e01ab2ce24cc5e686f862dd80eca137d6897f8e23ae63c2c29b349278803cc"));
     }
 
@@ -376,7 +377,7 @@ mod test {
         let tree = Tree::empty(&storage)
             .write(&["a", "b", "c", "d"], "value".to_string())
             .unwrap();
-        let hash = tree.store(&storage);
+        let hash = tree.store(&storage).unwrap();
         let tree = Tree::for_root(&storage, hash);
         let tree = tree.remove(&["a", "b", "c", "d"]).unwrap();
         assert_eq!(rep_subtree(&tree.root), "{None; }");
@@ -393,7 +394,7 @@ mod test {
     fn read_exists_from_storage() {
         let storage = LocalStorage::new();
         let tree = make_test_tree(&storage);
-        let hash = tree.store(&storage);
+        let hash = tree.store(&storage).unwrap();
         let tree = Tree::for_root(&storage, hash);
         assert_eq!(tree.read(&storage, &["sub", "two"]), Ok("2".to_string()));
     }

@@ -9,9 +9,10 @@ use bincode::rustc_serialize::{encode, decode};
 pub struct Content(Vec<u8>);
 
 impl Content {
-    pub fn new<T: Encodable + Decodable>(value: &T) -> Content {
-        let encoded = encode(value, SizeLimit::Infinite).unwrap();
-        Content(encoded)
+    pub fn new<T: Encodable + Decodable>(value: &T) -> Result<Content> {
+        let encoded = encode(value, SizeLimit::Infinite)
+            .chain_err(|| "Error encoding object")?;
+        Ok(Content(encoded))
     }
 
     pub fn hash(&self) -> Hash {
@@ -29,7 +30,7 @@ mod tests {
 
     #[test]
     fn encode() {
-        let content = Content::new(&"abcd".to_string());
+        let content = Content::new(&"abcd".to_string()).unwrap();
         let hash = content.hash();
         assert_eq!(hash.to_hex(),
                    "9481cd49061765e353c25758440d21223df63044352cfde1775e0debc2116841");

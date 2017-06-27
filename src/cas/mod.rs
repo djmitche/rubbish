@@ -15,7 +15,7 @@
 //! ```
 //! use rubbish::cas::CAS;
 //! let mut storage = rubbish::cas::Storage::new();
-//! let hash = storage.store(&42u32);
+//! let hash = storage.store(&42u32).unwrap();
 //! let result: u32 = storage.retrieve(&hash).unwrap();
 //! assert_eq!(result, 42u32);
 //! ```

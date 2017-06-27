@@ -26,13 +26,13 @@ impl Storage {
 }
 
 impl CAS for Storage {
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Hash {
-        let content = Content::new(value);
+    fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash> {
+        let content = Content::new(value)?;
         let hash = content.hash();
         self.map.borrow_mut().insert(hash.clone(), content);
         // note that we assume no hash collisions of encoded values, since this is
         // not a security-sensitive context
-        return hash;
+        Ok(hash)
     }
 
     fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T> {
@@ -53,8 +53,8 @@ mod tests {
     fn put_get_strings() {
         let storage = Storage::new();
 
-        let hash1 = storage.store(&"one".to_string());
-        let hash2 = storage.store(&"two".to_string());
+        let hash1 = storage.store(&"one".to_string()).unwrap();
+        let hash2 = storage.store(&"two".to_string()).unwrap();
         let badhash = Hash::from_hex("000000");
 
         assert_eq!(storage.retrieve::<String>(&hash1).unwrap(),
@@ -68,8 +68,8 @@ mod tests {
     fn put_twice() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"xyz".to_string());
-        let hash2 = storage.store(&"xyz".to_string());
+        let hash1 = storage.store(&"xyz".to_string()).unwrap();
+        let hash2 = storage.store(&"xyz".to_string()).unwrap();
         assert_eq!(hash1, hash2);
     }
 }
