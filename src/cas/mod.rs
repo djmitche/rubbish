@@ -5,19 +5,56 @@
 //!
 //! The API is in the `CAS` trait.
 //!
+//! # Warning
+//!
+//! This module will happily de-serialize an object as a different type than was used
+//! to serialize it, if asked to.  In most cases, this will not result in an error,
+//! just a bogus result value. The rationale for this design is that the stored data
+//! is shared among multiple nodes in a network, so any guarantees within a sigle
+//! instance of the application do not apply across the network.  For example, the
+//! `user::types::Data` struct may have a different format on different nodes. The
+//! user must guard against this possibility, so there is no need to waste time
+//! verifying type IDs within this module.
+//!
 //! # TODO
 //!
 //!  * Be threadsafe
-//!  * More tests (with threads, etc.)
+//!  * Use Serde instead of rustc_serialize
 //!
 //! # Examples
 //!
 //! ```
 //! use rubbish::cas::CAS;
 //! let mut storage = rubbish::cas::Storage::new();
-//! let hash = storage.store(&42u32).unwrap();
-//! let result: u32 = storage.retrieve(&hash).unwrap();
-//! assert_eq!(result, 42u32);
+//!
+//! // store some things
+//! let hash42 = storage.store(&42u32).unwrap();
+//! let hash314 = storage.store(&"π".to_string()).unwrap();
+//!
+//! // and retrieve them, by type
+//! assert_eq!(storage.retrieve::<u32>(&hash42).unwrap(), 42u32);
+//! assert_eq!(storage.retrieve::<String>(&hash314).unwrap(), "π".to_string());
+//! ```
+//!
+//! An example with a custom type:
+//!
+//! ```
+//! extern crate rustc_serialize;
+//! extern crate rubbish;
+//!
+//! use rubbish::cas::CAS;
+//! use rustc_serialize::{Decodable, Encodable};
+//!
+//! #[derive(Debug, RustcEncodable, RustcDecodable, PartialEq)]
+//! struct Data(u32, u32);
+//!
+//! fn main() {
+//!   let mut storage = rubbish::cas::Storage::new();
+//!
+//!   let hash = storage.store(&Data(10, 20)).unwrap();
+//!   let result: Data = storage.retrieve(&hash).unwrap();
+//!   assert_eq!(result, Data(10, 20));
+//! }
 //! ```
 
 mod hash;

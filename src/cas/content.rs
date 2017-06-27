@@ -45,4 +45,9 @@ mod tests {
                        .unwrap(),
                    "abcd".to_string());
     }
+
+    #[test]
+    fn decode_content_invalid() {
+        assert!(Content(vec![0u8, 159]).decode::<String>().is_err());
+    }
 }
