@@ -126,11 +126,11 @@ impl<'a, C> Tree<'a, C>
     /// Read the value at the given path in this tree, returning an error if this fails.
     /// If no value is set at the given path, that is considered an error.
     pub fn read(&self, storage: &'a C, path: &[&str]) -> Result<String> {
-        let mut node = try!(self.root.resolve(storage));
+        let mut node = self.root.resolve(storage)?;
 
         for name in path {
             node = match node.children.get(&name.to_string()) {
-                Some(ref subtree) => try!(subtree.resolve(storage)),
+                Some(ref subtree) => subtree.resolve(storage)?,
                 None => {
                     bail!("path not found");
                 }
@@ -147,7 +147,7 @@ impl<'a, C> Tree<'a, C>
     ///
     /// This prunes empty directories.
     fn modify(self, path: &[&str], data: Option<String>) -> Result<Tree<'a, C>> {
-        let resolved: Arc<Node<'a, C>> = try!(self.root.resolve(self.storage));
+        let resolved: Arc<Node<'a, C>> = self.root.resolve(self.storage)?;
 
         // first, make a stack of owned nodes, creating or cloning them as necessary
         let mut node_stack: Vec<Node<'a, C>> = vec![(*resolved).clone()];
@@ -156,7 +156,7 @@ impl<'a, C> Tree<'a, C>
                 let node: &Node<'a, C> = node_stack.last().unwrap();
                 match node.children.get(&name.to_string()) {
                     Some(ref subtree) => {
-                        let resolved = try!(subtree.resolve(self.storage));
+                        let resolved = subtree.resolve(self.storage)?;
                         (*resolved).clone()
                     }
                     None => {

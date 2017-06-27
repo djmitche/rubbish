@@ -70,7 +70,7 @@ impl<'a, C> StoredCommit<'a, C>
     pub fn make_child<F>(&self, mut modifier: F) -> Result<StoredCommit<'a, C>>
         where F: FnMut(Tree<'a, C>) -> Result<Tree<'a, C>>
     {
-        let new_tree = try!(modifier(self.tree.clone()));
+        let new_tree = modifier(self.tree.clone())?;
         Ok(StoredCommit {
                storage: self.storage,
                tree: new_tree,
@@ -147,8 +147,8 @@ mod test {
     fn test_make_child() {
         let storage = LocalStorage::new();
         fn mutator<'a>(tree: Tree<'a, LocalStorage>) -> Result<Tree<'a, LocalStorage>> {
-            let tree = try!(tree.write(&["x", "y"], "Y".to_string()));
-            let tree = try!(tree.write(&["x", "z"], "Z".to_string()));
+            let tree = tree.write(&["x", "y"], "Y".to_string())?;
+            let tree = tree.write(&["x", "z"], "Z".to_string())?;
             Ok(tree)
         }
 
