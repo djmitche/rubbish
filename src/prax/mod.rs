@@ -2,7 +2,7 @@
 //!
 //! This service achieves consensus on a value of an arbitrary encodable type that implements
 //! `DistributedState`. This state is modified by a fixed sequence of state-change operations,
-//! represented as encodable values of type C.
+//! represented as encodable values of associaed type Change.
 //!
 //! The state change operations cannot fail, as they are not applied until consensus is reached.
 //! However, they can return None to indicate that the operation does not apply. This is useful
@@ -23,7 +23,9 @@
 //!     Subtract(i32),
 //! }
 //!
-//! impl DistributedState<Change> for State {
+//! impl DistributedState for State {
+//!     type Change = Change;
+//!
 //!     fn update(&self, change: Change) -> Option<Self> {
 //!         match change {
 //!             Change::Add(i) => Some(State(self.0 + i)),
@@ -40,35 +42,31 @@
 //! }
 //! ```
 
-use std::marker::PhantomData;
+pub trait DistributedState: Sized {
+    type Change;
 
-pub trait DistributedState<C>: Sized {
     /// Apply the given state change to this state, either returning a new state if applicable,
     /// or None to indicate that the change is not applicable.
-    fn update(&self, change: C) -> Option<Self>;
+    fn update(&self, change: Self::Change) -> Option<Self>;
 }
 
-pub struct Prax<S, C> {
+pub struct Prax<S> {
     state: S,
-    _phantom: PhantomData<C>,
 }
 
-impl<S, C> Prax<S, C>
-    where S: DistributedState<C> + Clone
+impl<S> Prax<S>
+    where S: DistributedState + Clone
 {
     /// Create a new Prax instance, beginning with the given state
-    pub fn new(state: S) -> Prax<S, C> {
-        Prax {
-            state: state,
-            _phantom: PhantomData,
-        }
+    pub fn new(state: S) -> Prax<S> {
+        Prax { state: state }
     }
 
     /// Update the state by applying the given change.
     ///
     /// When this function returns, the change has been committed across the cluster.
     /// Returns true if the change was applicable, otherwise false.
-    pub fn update(&mut self, change: C) -> bool {
+    pub fn update(&mut self, change: S::Change) -> bool {
         match self.state.update(change) {
             Some(new) => {
                 self.state = new;

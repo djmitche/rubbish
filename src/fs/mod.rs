@@ -33,4 +33,4 @@ pub use self::error::*;
 
 pub use self::object::Object;
 pub use self::fs::FileSystem;
-pub use self::traits::FS;
+pub use self::traits::{FS, Commit};
