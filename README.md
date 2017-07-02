@@ -36,6 +36,10 @@ Finish this application in a non-networked state
 * Implement tip HTTP API
 * Implement generational garbage collection between cas and fs
 
+### Misc
+
+* Store different types in FS instead of an Object Enum
+
 ### Distribute
 
 * Build a network interface
@@ -49,6 +53,13 @@ Finish this application in a non-networked state
 * Logging
 * Write a simple command-line client
 * Access control
+
+### Rename Things
+
+* pile
+* heap
+* dumpster
+* truck
 
 ### Misc
 

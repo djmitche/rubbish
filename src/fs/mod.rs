@@ -5,13 +5,13 @@
 //! # Examples
 //!
 //! ```
+//! /*
 //! use rubbish::cas::Storage;
 //! use rubbish::fs::{FileSystem, FS, Object};
 //! // use rubbish::fs::Tree;
 //! let mut storage = Storage::new();
 //! let mut fs = FileSystem::new(&storage);
 //! // make a child commit with some tree modifications
-//! /*
 //! // prototype CommitBuilder interface..
 //! let child = fs.root_commit().update()
 //!     .write(&["x", "y"], "z".to_string())
@@ -22,15 +22,13 @@
 //! */
 //! ```
 
-mod object;
 mod fs;
-mod commit;
-mod tree;
-mod traits;
+//mod object;
+//mod commit;
+//mod tree;
 
 mod error;
 pub use self::error::*;
 
-pub use self::object::Object;
-pub use self::fs::FileSystem;
-pub use self::traits::{FS, Commit};
+//pub use self::object::Object;
+//pub use self::fs::FileSystem;

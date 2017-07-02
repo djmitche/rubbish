@@ -1,3 +1,6 @@
+// temp
+#![allow(dead_code)]
+
 extern crate crypto;
 extern crate bincode;
 extern crate rustc_serialize;
@@ -6,5 +9,5 @@ extern crate error_chain;
 
 pub mod cas;
 pub mod fs;
-pub mod prax;
-pub mod tip;
+//pub mod prax;
+//pub mod tip;
