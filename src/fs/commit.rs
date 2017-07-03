@@ -57,6 +57,21 @@ impl<'a, C> Commit<'a, C>
                 })
     }
 
+    /// Make a new commit that is a child of this one, with the given tree
+    pub fn make_child<'b>(fs: &'b FileSystem<C>,
+                          parent: Rc<Commit<'b, C>>,
+                          tree: Rc<Tree<'b, C>>)
+                          -> Result<Rc<Commit<'b, C>>> {
+        let content = CommitContent {
+            parents: vec![parent],
+            tree: tree,
+        };
+        Ok(Rc::new(Commit {
+                       fs: fs,
+                       inner: RefCell::new(LazyHashedObject::for_content(content)),
+                   }))
+    }
+
     /// Get the hash for this commit
     pub fn hash(&self) -> Result<&Hash> {
         self.inner.borrow_mut().hash(self.fs)

@@ -38,6 +38,8 @@ impl<'a, C> FileSystem<'a, C>
 #[cfg(test)]
 mod test {
     use super::FileSystem;
+    use fs::commit::Commit;
+    use fs::tree::Tree;
     use cas::LocalStorage;
     use cas::Hash;
 
@@ -60,5 +62,26 @@ mod test {
         assert_eq!(cmt.hash().unwrap(), &Hash::from_hex("012345"));
         // there's no such object with that hash, so getting parents fails
         assert!(cmt.parents().is_err());
+    }
+
+    #[test]
+    fn test_children() {
+        let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
+        // make a grandchild of the root
+        let cmt = Commit::root(&fs);
+        let cmt = Commit::make_child(&fs, cmt, Tree::empty(&fs)).unwrap();
+        let cmt = Commit::make_child(&fs, cmt, Tree::empty(&fs)).unwrap();
+
+        let grandkid_hash = "d04edfc4e211330c9ec78651a026e4e63d12e38e82098f6c0c4e931a6f979dc8";
+        assert_eq!(cmt.hash().unwrap(), &Hash::from_hex(grandkid_hash));
+
+        // fetch that back..
+        let cmt = Commit::for_hash(&fs, &Hash::from_hex(grandkid_hash));
+
+        // check the parent hash
+        let kid_hash = "7d134816ae341dd4cac908b4626f017412ea7d11536ad2db9ac014ff9772b129";
+        assert_eq!(cmt.parents().unwrap()[0].hash().unwrap(),
+                   &Hash::from_hex(kid_hash));
     }
 }
