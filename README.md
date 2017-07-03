@@ -29,6 +29,13 @@ The entire application is, of course, a work in progress.
 
 ## TODO
 
+### Fs Refactor
+
+* Write modification methods for Tree
+* Write wrappers for them on Commit (see old code)
+* Docs
+* Module-level example tests
+
 ### Single-Hosted
 
 Finish this application in a non-networked state
