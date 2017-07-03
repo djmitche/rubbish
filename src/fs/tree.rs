@@ -21,12 +21,14 @@ pub struct Tree<'a, C: 'a + CAS>
     inner: RefCell<LazyHashedObject<'a, TreeContent<'a, C>, C>>,
 }
 
+/// The lazily-loaded content of a tree
 #[derive(Debug)]
 struct TreeContent<'a, C: 'a + CAS> {
     data: Option<String>,
     children: HashMap<String, Rc<Tree<'a, C>>>,
 }
 
+/// A raw tree, as stored in the content-addressible storage.
 #[derive(Debug, RustcDecodable, RustcEncodable)]
 struct RawTree {
     data: Option<String>,
@@ -76,34 +78,6 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
     }
 
     /*
-    fn store_subtree(storage: &'a C, subtree: &SubTree<'a, C>) -> Result<Hash> {
-        match subtree {
-            &SubTree::Unresolved(ref hash) => Ok(hash.clone()),
-            &SubTree::Resolved(ref node) => {
-                let mut children = vec![];
-                let mut keys = node.children.keys().collect::<Vec<&String>>();
-                keys.sort();
-                children.reserve(keys.len());
-
-                for name in keys {
-                    let subtree = node.children.get(name).unwrap();
-                    children.push((name.clone(), Tree::store_subtree(storage, &subtree)?));
-                }
-
-                let obj = Object::Tree {
-                    data: node.data.clone(),
-                    children: children,
-                };
-                Ok(storage.store(&obj)?)
-            }
-        }
-    }
-
-    /// Store this tree into the given storage, returning its hash.
-    pub fn store(&self, storage: &'a C) -> Result<Hash> {
-        Tree::store_subtree(storage, &self.root)
-    }
-
     /// Return a tree containing new value at the designated path, replacing any
     /// existing value at that path.  The storage is used to read any unresolved
     /// tree nodes, but nothing is written to storage.
@@ -237,71 +211,6 @@ impl<'a, C: 'a + CAS> LazyContent<'a, C> for TreeContent<'a, C> {
         Ok(fs.storage.store(&raw)?)
     }
 }
-
-// ----
-
-/*
-impl<'a, C> Clone for Node<'a, C>
-    where C: 'a + CAS
-{
-    fn clone(&self) -> Self {
-        Node {
-            storage: self.storage,
-            data: self.data.clone(),
-            children: self.children.clone(),
-        }
-    }
-}
-
-impl<'a, C> Clone for SubTree<'a, C>
-    where C: 'a + CAS
-{
-    fn clone(&self) -> Self {
-        match *self {
-            SubTree::Unresolved(ref h) => SubTree::Unresolved(h.clone()),
-            SubTree::Resolved(ref n) => SubTree::Resolved(n.clone()),
-        }
-    }
-}
-
-impl<'a, C> SubTree<'a, C>
-    where C: 'a + CAS
-{
-    /// Resolve this SubTree to an Arc<Node>, retrieving if necessary.
-    fn resolve(&self, storage: &'a C) -> Result<Arc<Node<'a, C>>> {
-        match self {
-            &SubTree::Unresolved(ref hash) => {
-                if let Ok(obj) = storage.retrieve(hash) {
-                    if let Object::Tree { data, children } = obj {
-                        let mut childmap = HashMap::new();
-                        for (name, hash) in children {
-                            match childmap.get(&name) {
-                                None => {
-                                    childmap.insert(name, SubTree::Unresolved(hash));
-                                }
-                                _ => bail!("corrupt tree: duplicate child names"),
-                            }
-                        }
-
-                        let node = Node {
-                            storage: storage,
-                            data: data,
-                            children: childmap,
-                        };
-                        Ok(Arc::new(node))
-                    } else {
-                        bail!("not a tree")
-                    }
-                } else {
-                    // TODO: pass on error
-                    bail!("no object with that hash")
-                }
-            }
-            &SubTree::Resolved(ref node_arc) => Ok(node_arc.clone()),
-        }
-    }
-}
-*/
 
 #[cfg(test)]
 mod test {
