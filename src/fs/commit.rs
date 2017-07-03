@@ -1,6 +1,7 @@
 use fs::error::*;
 use fs::lazy::{LazyHashedObject, LazyContent};
 use fs::fs::FileSystem;
+use fs::tree::Tree;
 use cas::Hash;
 use cas::CAS;
 use std::cell::RefCell;
@@ -23,13 +24,14 @@ pub struct Commit<'a, C: 'a + CAS> {
 struct CommitContent<'a, C: 'a + CAS> {
     /// Parent commits
     parents: Vec<Rc<Commit<'a, C>>>,
-    // TODO: tree
+    tree: Rc<Tree<'a, C>>,
 }
 
 /// A raw commit, as stored in the content-addressible storage.
 #[derive(Debug, RustcDecodable, RustcEncodable)]
 struct RawCommit {
     parents: Vec<Hash>,
+    tree: Hash,
 }
 
 impl<'a, C> Commit<'a, C>
@@ -37,7 +39,10 @@ impl<'a, C> Commit<'a, C>
 {
     /// Return a refcounted root commit
     pub fn root<'b>(fs: &'b FileSystem<C>) -> Rc<Commit<'b, C>> {
-        let content = CommitContent { parents: vec![] };
+        let content = CommitContent {
+            parents: vec![],
+            tree: Tree::empty(fs),
+        };
         Rc::new(Commit {
                     fs: fs,
                     inner: RefCell::new(LazyHashedObject::for_content(content)),
@@ -57,10 +62,16 @@ impl<'a, C> Commit<'a, C>
         self.inner.borrow_mut().hash(self.fs)
     }
 
-    /// Get the parents of this commit.
+    /// Get the parents of this commit
     pub fn parents(&'a self) -> Result<&'a [Rc<Commit<'a, C>>]> {
         let content = self.inner.borrow_mut().content(self.fs)?;
         Ok(&content.parents[..])
+    }
+
+    /// Get the Tree associated with this commit
+    pub fn tree(&'a self) -> Result<Rc<Tree<'a, C>>> {
+        let content = self.inner.borrow_mut().content(self.fs)?;
+        Ok(content.tree.clone())
     }
 }
 
@@ -69,11 +80,16 @@ impl<'a, C> LazyContent<'a, C> for CommitContent<'a, C>
 {
     fn retrieve_from(fs: &'a FileSystem<'a, C>, hash: &Hash) -> Result<Self> {
         let raw: RawCommit = fs.storage.retrieve(hash)?;
+
         let mut parents: Vec<Rc<Commit<'a, C>>> = vec![];
         for h in raw.parents.iter() {
             parents.push(Commit::for_hash(fs, h));
         }
-        Ok(CommitContent { parents: parents })
+
+        Ok(CommitContent {
+               parents: parents,
+               tree: Tree::for_hash(fs, &raw.tree),
+           })
     }
 
     fn store_in(&self, fs: &FileSystem<'a, C>) -> Result<Hash> {
@@ -83,7 +99,10 @@ impl<'a, C> LazyContent<'a, C> for CommitContent<'a, C>
             let phash = p.hash()?.clone();
             parent_hashes.push(phash);
         }
-        let raw = RawCommit { parents: parent_hashes };
+        let raw = RawCommit {
+            parents: parent_hashes,
+            tree: self.tree.hash()?.clone(),
+        };
         Ok(fs.storage.store(&raw)?)
     }
 }
@@ -95,7 +114,7 @@ mod test {
     use cas::LocalStorage;
     use cas::Hash;
 
-    const ROOT_HASH: &'static str = "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc";
+    const ROOT_HASH: &'static str = "86f8e00f8fdef1675b25f5a38abde52a7a9da0bf8506f137e32d6e3f37d88740";
 
     #[test]
     fn test_root() {
@@ -112,7 +131,8 @@ mod test {
         let fs = FileSystem::new(&storage);
         let cmt = Commit::for_hash(&fs, &Hash::from_hex("012345"));
         assert_eq!(cmt.hash().unwrap(), &Hash::from_hex("012345"));
-        // there's no such object with that hash, so getting parents fails
+        // there's no such object with that hash, so getting parents or tree fails
         assert!(cmt.parents().is_err());
+        assert!(cmt.tree().is_err());
     }
 }

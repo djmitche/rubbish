@@ -25,8 +25,7 @@
 mod fs;
 mod lazy;
 mod commit;
-//mod object;
-//mod tree;
+mod tree;
 
 mod error;
 pub use self::error::*;

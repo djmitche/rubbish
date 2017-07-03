@@ -1,74 +1,81 @@
 use fs::error::*;
+use fs::lazy::{LazyHashedObject, LazyContent};
+use fs::fs::FileSystem;
 use std::collections::HashMap;
-use std::sync::Arc;
-use fs::Object;
 use cas::Hash;
 use cas::CAS;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
 /// `foo/bar/bing`).
 #[derive(Debug)]
-pub struct Tree<'a, C>
+pub struct Tree<'a, C: 'a + CAS>
     where C: 'a + CAS
 {
-    storage: &'a C,
-    root: SubTree<'a, C>,
+    /// The filesystem within which this Tree exists
+    fs: &'a FileSystem<'a, C>,
+
+    /// The lazily loaded data about this commit.
+    inner: RefCell<LazyHashedObject<'a, TreeContent<'a, C>, C>>,
 }
 
 #[derive(Debug)]
-struct Node<'a, C>
-    where C: 'a + CAS
-{
-    storage: &'a C,
+struct TreeContent<'a, C: 'a + CAS> {
     data: Option<String>,
-    children: HashMap<String, SubTree<'a, C>>,
+    children: HashMap<String, Rc<Tree<'a, C>>>,
 }
 
-#[derive(Debug)]
-enum SubTree<'a, C>
-    where C: 'a + CAS
-{
-    Unresolved(Hash),
-    // TODO: Rc might be sufficient
-    Resolved(Arc<Node<'a, C>>),
+#[derive(Debug, RustcDecodable, RustcEncodable)]
+struct RawTree {
+    data: Option<String>,
+    children: Vec<(String, Hash)>,
 }
 
-impl<'a, C> Clone for Tree<'a, C>
-    where C: 'a + CAS
-{
-    fn clone(&self) -> Self {
-        Tree {
-            storage: self.storage,
-            root: self.root.clone(),
-        }
-    }
-}
 
-impl<'a, C> Tree<'a, C>
-    where C: 'a + CAS
-{
-    /// Create a new tree with the given root hash
-    pub fn for_root(storage: &'a C, root: Hash) -> Tree<'a, C> {
-        Tree {
-            storage: storage,
-            root: SubTree::Unresolved(root),
-        }
+impl<'a, C: 'a + CAS> Tree<'a, C> {
+    /// Return a refcounted tree for the given hash
+    pub fn for_hash<'b>(fs: &'b FileSystem<C>, hash: &Hash) -> Rc<Tree<'b, C>> {
+        Rc::new(Tree {
+                    fs: fs,
+                    inner: RefCell::new(LazyHashedObject::for_hash(hash)),
+                })
     }
 
     /// Create a new, empty tree
-    pub fn empty(storage: &'a C) -> Tree<'a, C> {
-        let root = SubTree::Resolved(Arc::new(Node {
-                                                  storage: storage,
-                                                  data: None,
-                                                  children: HashMap::new(),
-                                              }));
-        Tree {
-            storage: storage,
-            root: root,
-        }
+    pub fn empty(fs: &'a FileSystem<C>) -> Rc<Tree<'a, C>> {
+        let content = TreeContent {
+            data: None,
+            children: HashMap::new(),
+        };
+        Rc::new(Tree {
+                    fs: fs,
+                    inner: RefCell::new(LazyHashedObject::for_content(content)),
+                })
     }
 
+    /// Get the hash for this tree
+    pub fn hash(&self) -> Result<&Hash> {
+        self.inner.borrow_mut().hash(self.fs)
+    }
+
+    /// Get the children of this tree.
+    pub fn children(&'a self) -> Result<&'a HashMap<String, Rc<Tree<'a, C>>>> {
+        let content = self.inner.borrow_mut().content(self.fs)?;
+        Ok(&content.children)
+    }
+
+    /// Get the data at this tree.
+    pub fn data(&'a self) -> Result<Option<&'a str>> {
+        let content = self.inner.borrow_mut().content(self.fs)?;
+        Ok(match content.data {
+               None => None,
+               Some(ref s) => Some(s),
+           })
+    }
+
+    /*
     fn store_subtree(storage: &'a C, subtree: &SubTree<'a, C>) -> Result<Hash> {
         match subtree {
             &SubTree::Unresolved(ref hash) => Ok(hash.clone()),
@@ -201,8 +208,39 @@ impl<'a, C> Tree<'a, C>
                       root: SubTree::Resolved(Arc::new(iter)),
                   });
     }
+    */
 }
 
+impl<'a, C: 'a + CAS> LazyContent<'a, C> for TreeContent<'a, C> {
+    fn retrieve_from(fs: &'a FileSystem<'a, C>, hash: &Hash) -> Result<Self> {
+        let raw: RawTree = fs.storage.retrieve(hash)?;
+        let mut children: HashMap<String, Rc<Tree<'a, C>>> = HashMap::new();
+        for elt in raw.children.iter() {
+            children.insert(elt.0.clone(), Tree::for_hash(fs, &elt.1));
+        }
+        Ok(TreeContent {
+               data: raw.data,
+               children: children,
+           })
+    }
+
+    fn store_in(&self, fs: &FileSystem<'a, C>) -> Result<Hash> {
+        let mut children: Vec<(String, Hash)> = vec![];
+        children.reserve(self.children.len());
+        for (k, v) in self.children.iter() {
+            children.push((k.clone(), v.hash()?.clone()));
+        }
+        let raw = RawTree {
+            data: self.data.clone(),
+            children: children,
+        };
+        Ok(fs.storage.store(&raw)?)
+    }
+}
+
+// ----
+
+/*
 impl<'a, C> Clone for Node<'a, C>
     where C: 'a + CAS
 {
@@ -263,14 +301,39 @@ impl<'a, C> SubTree<'a, C>
         }
     }
 }
+*/
 
 #[cfg(test)]
 mod test {
-    use fs::error::*;
-    use std::fmt::Debug;
-    use super::{Tree, SubTree};
-    use cas::{LocalStorage, Hash, CAS};
+    use fs::FileSystem;
+    use super::Tree;
+    use cas::LocalStorage;
+    use cas::Hash;
 
+    const EMPTY_HASH: &'static str = "3e7077fd2f66d689e0cee6a7cf5b37bf2dca7c979af356d0a31cbc5c85605c7d";
+
+    #[test]
+    fn test_empty() {
+        let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
+        let empty = Tree::empty(&fs);
+        assert_eq!(empty.hash().unwrap(), &Hash::from_hex(EMPTY_HASH));
+        assert_eq!(empty.children().unwrap().len(), 0);
+        assert!(empty.data().unwrap().is_none())
+    }
+
+    #[test]
+    fn test_for_hash() {
+        let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
+        let cmt = Tree::for_hash(&fs, &Hash::from_hex("012345"));
+        assert_eq!(cmt.hash().unwrap(), &Hash::from_hex("012345"));
+        // there's no such object with that hash, so getting children or data fails
+        assert!(cmt.children().is_err());
+        assert!(cmt.data().is_err());
+    }
+
+    /*
     fn make_test_tree<'a, C>(storage: &'a C) -> Tree<'a, C>
         where C: 'a + CAS
     {
@@ -430,4 +493,5 @@ mod test {
         assert_eq!(check_error(tree.read(&storage, &["three", "subtree"])),
                    "path not found");
     }
+*/
 }

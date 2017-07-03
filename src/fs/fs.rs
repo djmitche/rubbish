@@ -41,7 +41,7 @@ mod test {
     use cas::LocalStorage;
     use cas::Hash;
 
-    const ROOT_HASH: &'static str = "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc";
+    const ROOT_HASH: &'static str = "86f8e00f8fdef1675b25f5a38abde52a7a9da0bf8506f137e32d6e3f37d88740";
 
     #[test]
     fn test_root() {
