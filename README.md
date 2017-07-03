@@ -33,12 +33,13 @@ The entire application is, of course, a work in progress.
 
 Finish this application in a non-networked state
 
-* Implement tip HTTP API
+* Implement tip API
 * Implement generational garbage collection between cas and fs
 
 ### Misc
 
-* Store different types in FS instead of an Object Enum
+* use pub(crate) (rust 1.19?)
+* use serde, or better yet some write-based thing so we don't depend on repeatability of hash ordering
 
 ### Distribute
 

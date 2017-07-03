@@ -23,12 +23,12 @@
 //! ```
 
 mod fs;
+mod lazy;
+mod commit;
 //mod object;
-//mod commit;
 //mod tree;
 
 mod error;
 pub use self::error::*;
 
-//pub use self::object::Object;
-//pub use self::fs::FileSystem;
+pub use self::fs::FileSystem;
