@@ -11,21 +11,21 @@ use std::rc::Rc;
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
 /// `foo/bar/bing`).
 #[derive(Debug)]
-pub struct Tree<'a, C: 'a + CAS>
-    where C: 'a + CAS
+pub struct Tree<'f, C: 'f + CAS>
+    where C: 'f + CAS
 {
     /// The filesystem within which this Tree exists
-    fs: &'a FileSystem<'a, C>,
+    fs: &'f FileSystem<'f, C>,
 
     /// The lazily loaded data about this commit.
-    inner: RefCell<LazyHashedObject<'a, TreeContent<'a, C>, C>>,
+    inner: RefCell<LazyHashedObject<'f, C, TreeContent<'f, C>>>,
 }
 
 /// The lazily-loaded content of a tree
 #[derive(Debug)]
-struct TreeContent<'a, C: 'a + CAS> {
+struct TreeContent<'f, C: 'f + CAS> {
     data: Option<String>,
-    children: HashMap<String, Rc<Tree<'a, C>>>,
+    children: HashMap<String, Rc<Tree<'f, C>>>,
 }
 
 /// A raw tree, as stored in the content-addressible storage.
@@ -36,9 +36,9 @@ struct RawTree {
 }
 
 
-impl<'a, C: 'a + CAS> Tree<'a, C> {
+impl<'f, C: 'f + CAS> Tree<'f, C> {
     /// Return a refcounted tree for the given hash
-    pub fn for_hash<'b>(fs: &'b FileSystem<C>, hash: &Hash) -> Rc<Tree<'b, C>> {
+    pub fn for_hash(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Rc<Tree<'f, C>> {
         Rc::new(Tree {
                     fs: fs,
                     inner: RefCell::new(LazyHashedObject::for_hash(hash)),
@@ -46,7 +46,7 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
     }
 
     /// Create a new, empty tree
-    pub fn empty(fs: &'a FileSystem<C>) -> Rc<Tree<'a, C>> {
+    pub fn empty(fs: &'f FileSystem<C>) -> Rc<Tree<'f, C>> {
         let content = TreeContent {
             data: None,
             children: HashMap::new(),
@@ -59,17 +59,18 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
 
     /// Get the hash for this tree
     pub fn hash(&self) -> Result<&Hash> {
-        self.inner.borrow_mut().hash(self.fs)
+        let mut borrow = self.inner.borrow_mut();
+        borrow.hash(self.fs)
     }
 
     /// Get the children of this tree.
-    pub fn children(&'a self) -> Result<&'a HashMap<String, Rc<Tree<'a, C>>>> {
+    pub fn children(&self) -> Result<&HashMap<String, Rc<Tree<'f, C>>>> {
         let content = self.inner.borrow_mut().content(self.fs)?;
         Ok(&content.children)
     }
 
     /// Get the data at this tree.
-    pub fn data(&'a self) -> Result<Option<&'a str>> {
+    pub fn data(&self) -> Result<Option<&str>> {
         let content = self.inner.borrow_mut().content(self.fs)?;
         Ok(match content.data {
                None => None,
@@ -88,7 +89,7 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write<'b>(self, path: &'b [&str], data: String) -> Result<Tree<'a, C>> {
+    pub fn write<'b>(self, path: &'b [&str], data: String) -> Result<Tree<'f, C>> {
         self.modify(path, Some(data))
     }
 
@@ -100,13 +101,13 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, path: &[&str]) -> Result<Tree<'a, C>> {
+    pub fn remove(self, path: &[&str]) -> Result<Tree<'f, C>> {
         self.modify(path, None)
     }
 
     /// Read the value at the given path in this tree, returning an error if this fails.
     /// If no value is set at the given path, that is considered an error.
-    pub fn read(&self, storage: &'a C, path: &[&str]) -> Result<String> {
+    pub fn read(&self, storage: &'f C, path: &[&str]) -> Result<String> {
         let mut node = self.root.resolve(storage)?;
 
         for name in path {
@@ -127,14 +128,14 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
     /// some nodes with the original via path copying.
     ///
     /// This prunes empty directories.
-    fn modify(self, path: &[&str], data: Option<String>) -> Result<Tree<'a, C>> {
-        let resolved: Arc<Node<'a, C>> = self.root.resolve(self.storage)?;
+    fn modify(self, path: &[&str], data: Option<String>) -> Result<Tree<'f, C>> {
+        let resolved: Arc<Node<'f, C>> = self.root.resolve(self.storage)?;
 
         // first, make a stack of owned nodes, creating or cloning them as necessary
-        let mut node_stack: Vec<Node<'a, C>> = vec![(*resolved).clone()];
+        let mut node_stack: Vec<Node<'f, C>> = vec![(*resolved).clone()];
         for name in path {
             let new_node = {
-                let node: &Node<'a, C> = node_stack.last().unwrap();
+                let node: &Node<'f, C> = node_stack.last().unwrap();
                 match node.children.get(&name.to_string()) {
                     Some(ref subtree) => {
                         let resolved = subtree.resolve(self.storage)?;
@@ -160,9 +161,9 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
 
         // finally, stitch the tree back together by modifying nodes back up to the
         // root
-        let mut iter: Node<'a, C> = node_stack.pop().unwrap();
+        let mut iter: Node<'f, C> = node_stack.pop().unwrap();
         while node_stack.len() > 0 {
-            let mut parent: Node<'a, C> = node_stack.pop().unwrap();
+            let mut parent: Node<'f, C> = node_stack.pop().unwrap();
             let name = path[node_stack.len()].to_string();
 
             // if iter is empty, omit it from its parent
@@ -185,10 +186,12 @@ impl<'a, C: 'a + CAS> Tree<'a, C> {
     */
 }
 
-impl<'a, C: 'a + CAS> LazyContent<'a, C> for TreeContent<'a, C> {
-    fn retrieve_from(fs: &'a FileSystem<'a, C>, hash: &Hash) -> Result<Self> {
+impl<'f, C> LazyContent<'f, C> for TreeContent<'f, C>
+    where C: 'f + CAS
+{
+    fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self> {
         let raw: RawTree = fs.storage.retrieve(hash)?;
-        let mut children: HashMap<String, Rc<Tree<'a, C>>> = HashMap::new();
+        let mut children: HashMap<String, Rc<Tree<'f, C>>> = HashMap::new();
         for elt in raw.children.iter() {
             children.insert(elt.0.clone(), Tree::for_hash(fs, &elt.1));
         }
@@ -198,7 +201,7 @@ impl<'a, C: 'a + CAS> LazyContent<'a, C> for TreeContent<'a, C> {
            })
     }
 
-    fn store_in(&self, fs: &FileSystem<'a, C>) -> Result<Hash> {
+    fn store_in(&self, fs: &'f FileSystem<'f, C>) -> Result<Hash> {
         let mut children: Vec<(String, Hash)> = vec![];
         children.reserve(self.children.len());
         for (k, v) in self.children.iter() {
