@@ -10,9 +10,8 @@ use std::marker::PhantomData;
 /// hash).  INVARIANT: at least one of `hash` and `content` is always set, and once set, neither is
 /// modified.
 #[derive(Debug)]
-pub struct LazyHashedObject<'a, T, C>
-    where C: 'a + CAS,
-          T: LazyContent<'a, C>
+pub struct LazyHashedObject<'f, C: 'f + CAS, T>
+    where T: LazyContent<'f, C>
 {
     /// The hash of this object, if it has already been calculated
     hash: Option<Hash>,
@@ -20,28 +19,37 @@ pub struct LazyHashedObject<'a, T, C>
     /// The content of this object, if it has already been loaded
     content: Option<T>,
 
-    // this seems pretty stupid..
-    _phantom: PhantomData<&'a C>,
+    // use the type parameters, since rust does not consider a trait bound
+    // to be a "use' of a type paramter
+    _phantom: &'f PhantomData<C>,
 }
 
-
-pub trait LazyContent<'a, C>: Sized
-    where C: 'a + CAS
-{
+pub trait LazyContent<'f, C: 'f + CAS>: Sized {
     /// Retrive this content from the given storage
-    fn retrieve_from(fs: &'a FileSystem<'a, C>, hash: &Hash) -> Result<Self>;
-    fn store_in(&self, fs: &FileSystem<'a, C>) -> Result<Hash>;
+    fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self>;
+    fn store_in<'a>(&'a self, fs: &'f FileSystem<'f, C>) -> Result<Hash>;
 }
 
-impl<'a, C, T> LazyHashedObject<'a, T, C>
-    where C: 'a + CAS,
-          T: LazyContent<'a, C>
+impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
+    where T: LazyContent<'f, C>
 {
+    /// Return a reference to PhantomData with the appropriate lifetime.  PhantomData is a
+    /// zero-byte data structure, so lifetime isn't a relevant concept and upgrading its
+    /// lifetime is a harmless hack.
+    fn phantom_hack() -> &'f PhantomData<C> {
+        let zero_bytes_live_forever: &PhantomData<C> = &PhantomData;
+        unsafe {
+            (zero_bytes_live_forever as *const PhantomData<C>)
+                .as_ref()
+                .unwrap()
+        }
+    }
+
     pub fn for_content(content: T) -> Self {
         LazyHashedObject {
             hash: None,
             content: Some(content),
-            _phantom: PhantomData {},
+            _phantom: LazyHashedObject::<'f, C, T>::phantom_hack(),
         }
     }
 
@@ -49,13 +57,13 @@ impl<'a, C, T> LazyHashedObject<'a, T, C>
         LazyHashedObject {
             hash: Some(hash.clone()),
             content: None,
-            _phantom: PhantomData {},
+            _phantom: LazyHashedObject::<'f, C, T>::phantom_hack(),
         }
     }
 
     /// Ensure that self.hash is not None. This may write the commit to storage,
     /// so it may fail and thus returns a Result.
-    fn ensure_hash(&mut self, fs: &FileSystem<'a, C>) -> Result<()> {
+    fn ensure_hash<'a>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<()> {
         if let Some(_) = self.hash {
             return Ok(());
         }
@@ -70,20 +78,22 @@ impl<'a, C, T> LazyHashedObject<'a, T, C>
         }
     }
 
-    pub fn hash(&mut self, fs: &FileSystem<'a, C>) -> Result<&'a Hash> {
+    // TODO: I think 'b here means "however long the caller wants it to last" which isn't
+    // what we want..
+    pub fn hash<'a, 'b>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<&'b Hash> {
         self.ensure_hash(fs)?;
         match self.hash {
             None => unreachable!(),
             Some(ref h) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of h to 'a based on the invariant
+                       // "upgrade" the lifetime of h to that of self based on the invariant
                        (h as *const Hash).as_ref().unwrap()
                    })
             }
         }
     }
 
-    fn ensure_content(&mut self, fs: &'a FileSystem<'a, C>) -> Result<()> {
+    fn ensure_content<'a>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<()> {
         if let Some(_) = self.content {
             return Ok(());
         }
@@ -98,13 +108,15 @@ impl<'a, C, T> LazyHashedObject<'a, T, C>
         }
     }
 
-    pub fn content(&mut self, fs: &'a FileSystem<'a, C>) -> Result<&'a T> {
+    // TODO: I think 'b here means "however long the caller wants it to last" which isn't
+    // what we want..
+    pub fn content<'a, 'b>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<&'b T> {
         self.ensure_content(fs)?;
         match self.content {
             None => unreachable!(),
             Some(ref c) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of c to 'a based on the invariant
+                       // "upgrade" the lifetime of c to that of self based on the invariant
                        (c as *const T).as_ref().unwrap()
                    })
             }

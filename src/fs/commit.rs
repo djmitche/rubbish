@@ -11,20 +11,20 @@ use std::rc::Rc;
 
 /// A Commit represents the state of the filesystem, and links to previous (parent) commits.
 #[derive(Debug)]
-pub struct Commit<'a, C: 'a + CAS> {
+pub struct Commit<'f, C: 'f + CAS> {
     /// The filesystem within which this commit exists
-    fs: &'a FileSystem<'a, C>,
+    fs: &'f FileSystem<'f, C>,
 
     /// The lazily loaded data about this commit.
-    inner: RefCell<LazyHashedObject<'a, CommitContent<'a, C>, C>>,
+    inner: RefCell<LazyHashedObject<'f, C, CommitContent<'f, C>>>,
 }
 
 /// The lazily-loaded content of a Commit.
 #[derive(Debug)]
-struct CommitContent<'a, C: 'a + CAS> {
+struct CommitContent<'f, C: 'f + CAS> {
     /// Parent commits
-    parents: Vec<Rc<Commit<'a, C>>>,
-    tree: Rc<Tree<'a, C>>,
+    parents: Vec<Rc<Commit<'f, C>>>,
+    tree: Rc<Tree<'f, C>>,
 }
 
 /// A raw commit, as stored in the content-addressible storage.
@@ -34,11 +34,11 @@ struct RawCommit {
     tree: Hash,
 }
 
-impl<'a, C> Commit<'a, C>
-    where C: 'a + CAS
+impl<'f, C> Commit<'f, C>
+    where C: 'f + CAS
 {
     /// Return a refcounted root commit
-    pub fn root<'b>(fs: &'b FileSystem<C>) -> Rc<Commit<'b, C>> {
+    pub fn root(fs: &'f FileSystem<'f, C>) -> Rc<Commit<'f, C>> {
         let content = CommitContent {
             parents: vec![],
             tree: Tree::empty(fs),
@@ -50,7 +50,7 @@ impl<'a, C> Commit<'a, C>
     }
 
     /// Return a refcounted commit for the given hash
-    pub fn for_hash<'b>(fs: &'b FileSystem<C>, hash: &Hash) -> Rc<Commit<'b, C>> {
+    pub fn for_hash(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Rc<Commit<'f, C>> {
         Rc::new(Commit {
                     fs: fs,
                     inner: RefCell::new(LazyHashedObject::for_hash(hash)),
@@ -74,29 +74,32 @@ impl<'a, C> Commit<'a, C>
 
     /// Get the hash for this commit
     pub fn hash(&self) -> Result<&Hash> {
-        self.inner.borrow_mut().hash(self.fs)
+        let mut borrow = self.inner.borrow_mut();
+        borrow.hash(self.fs)
     }
 
     /// Get the parents of this commit
-    pub fn parents(&'a self) -> Result<&'a [Rc<Commit<'a, C>>]> {
-        let content = self.inner.borrow_mut().content(self.fs)?;
+    pub fn parents(&self) -> Result<&[Rc<Commit<'f, C>>]> {
+        let mut borrow = self.inner.borrow_mut();
+        let content = borrow.content(self.fs)?;
         Ok(&content.parents[..])
     }
 
     /// Get the Tree associated with this commit
-    pub fn tree(&'a self) -> Result<Rc<Tree<'a, C>>> {
-        let content = self.inner.borrow_mut().content(self.fs)?;
+    pub fn tree(&self) -> Result<Rc<Tree<'f, C>>> {
+        let mut borrow = self.inner.borrow_mut();
+        let content = borrow.content(self.fs)?;
         Ok(content.tree.clone())
     }
 }
 
-impl<'a, C> LazyContent<'a, C> for CommitContent<'a, C>
-    where C: 'a + CAS
+impl<'f, C> LazyContent<'f, C> for CommitContent<'f, C>
+    where C: 'f + CAS
 {
-    fn retrieve_from(fs: &'a FileSystem<'a, C>, hash: &Hash) -> Result<Self> {
+    fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<CommitContent<'f, C>> {
         let raw: RawCommit = fs.storage.retrieve(hash)?;
 
-        let mut parents: Vec<Rc<Commit<'a, C>>> = vec![];
+        let mut parents: Vec<Rc<Commit<'f, C>>> = vec![];
         for h in raw.parents.iter() {
             parents.push(Commit::for_hash(fs, h));
         }
@@ -107,7 +110,7 @@ impl<'a, C> LazyContent<'a, C> for CommitContent<'a, C>
            })
     }
 
-    fn store_in(&self, fs: &FileSystem<'a, C>) -> Result<Hash> {
+    fn store_in(&self, fs: &FileSystem<'f, C>) -> Result<Hash> {
         let mut parent_hashes: Vec<Hash> = vec![];
         parent_hashes.reserve(self.parents.len());
         for p in self.parents.iter() {
