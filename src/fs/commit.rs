@@ -4,7 +4,6 @@ use fs::fs::FileSystem;
 use fs::tree::Tree;
 use cas::Hash;
 use cas::CAS;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 // TODO: use pub(crate)
@@ -16,7 +15,7 @@ pub struct Commit<'f, C: 'f + CAS> {
     fs: &'f FileSystem<'f, C>,
 
     /// The lazily loaded data about this commit.
-    inner: RefCell<LazyHashedObject<'f, C, CommitContent<'f, C>>>,
+    inner: LazyHashedObject<'f, C, CommitContent<'f, C>>,
 }
 
 /// The lazily-loaded content of a Commit.
@@ -45,7 +44,7 @@ impl<'f, C> Commit<'f, C>
         };
         Rc::new(Commit {
                     fs: fs,
-                    inner: RefCell::new(LazyHashedObject::for_content(content)),
+                    inner: LazyHashedObject::for_content(content),
                 })
     }
 
@@ -53,7 +52,7 @@ impl<'f, C> Commit<'f, C>
     pub fn for_hash(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Rc<Commit<'f, C>> {
         Rc::new(Commit {
                     fs: fs,
-                    inner: RefCell::new(LazyHashedObject::for_hash(hash)),
+                    inner: LazyHashedObject::for_hash(hash),
                 })
     }
 
@@ -68,27 +67,24 @@ impl<'f, C> Commit<'f, C>
         };
         Ok(Rc::new(Commit {
                        fs: fs,
-                       inner: RefCell::new(LazyHashedObject::for_content(content)),
+                       inner: LazyHashedObject::for_content(content),
                    }))
     }
 
     /// Get the hash for this commit
     pub fn hash(&self) -> Result<&Hash> {
-        let mut borrow = self.inner.borrow_mut();
-        borrow.hash(self.fs)
+        self.inner.hash(self.fs)
     }
 
     /// Get the parents of this commit
     pub fn parents(&self) -> Result<&[Rc<Commit<'f, C>>]> {
-        let mut borrow = self.inner.borrow_mut();
-        let content = borrow.content(self.fs)?;
+        let content = self.inner.content(self.fs)?;
         Ok(&content.parents[..])
     }
 
     /// Get the Tree associated with this commit
     pub fn tree(&self) -> Result<Rc<Tree<'f, C>>> {
-        let mut borrow = self.inner.borrow_mut();
-        let content = borrow.content(self.fs)?;
+        let content = self.inner.content(self.fs)?;
         Ok(content.tree.clone())
     }
 }

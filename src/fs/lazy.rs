@@ -2,15 +2,24 @@ use fs::error::*;
 use fs::fs::FileSystem;
 use cas::Hash;
 use cas::CAS;
+use std::cell::RefCell;
 use std::marker::PhantomData;
 
 // TODO: use pub(crate)
 
-/// Each object (tree or commit) has a hash and can either be loaded (full of data) or not (just a
-/// hash).  INVARIANT: at least one of `hash` and `content` is always set, and once set, neither is
-/// modified.
+/// A LazyHashedObject is an object which can be stored by hash in a FileSystem and retrieved from
+/// one.  It can be created with a hash, in which case the object's content (of type T) is loaded
+/// only when requested; or it can be created with content, in which case the hash is only
+/// determined when requested (with the object stored in the FileSystem at that time).
 #[derive(Debug)]
-pub struct LazyHashedObject<'f, C: 'f + CAS, T>
+pub struct LazyHashedObject<'f, C: 'f + CAS, T: LazyContent<'f, C>>(RefCell<LazyInner<'f, C, T>>);
+
+/// LazyInner proivdes interior mutability for LazyHashedObject.
+///
+/// INVARIANT α: at least one of `hash` and `content` is always `Some(_)`.
+/// INVARIANT β: a `Some(_)` value for `hash` or `content` is immutable.
+#[derive(Debug)]
+struct LazyInner<'f, C: 'f + CAS, T>
     where T: LazyContent<'f, C>
 {
     /// The hash of this object, if it has already been calculated
@@ -24,18 +33,58 @@ pub struct LazyHashedObject<'f, C: 'f + CAS, T>
     _phantom: &'f PhantomData<C>,
 }
 
+/// LazyContent bounds content that can be stored as a `LazyHashedObject`, providing
+/// methods to retrieve and store the content in a FileSystem.
 pub trait LazyContent<'f, C: 'f + CAS>: Sized {
-    /// Retrive this content from the given storage
+    /// Retrive this content from the given FileSystem
     fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self>;
+
+    /// Store the content in the given FileSystem, returning its hash
     fn store_in<'a>(&'a self, fs: &'f FileSystem<'f, C>) -> Result<Hash>;
 }
 
 impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
     where T: LazyContent<'f, C>
 {
-    /// Return a reference to PhantomData with the appropriate lifetime.  PhantomData is a
-    /// zero-byte data structure, so lifetime isn't a relevant concept and upgrading its
-    /// lifetime is a harmless hack.
+    /// Create a new LazyHashedObject containing the given content.  This is a lazy operation, so
+    /// no storage occurs until the object's hash is requested.
+    pub fn for_content(content: T) -> Self {
+        LazyHashedObject(RefCell::new(LazyInner::for_content(content)))
+    }
+
+    /// Create a new LazyHashedObject with the given hash.  This is a lazy operation, so the
+    /// content is not loaded until requested.
+    pub fn for_hash(hash: &Hash) -> Self {
+        LazyHashedObject(RefCell::new(LazyInner::for_hash(hash)))
+    }
+
+    /// Get the hash for this object, writing its content to the FileSystem first if necessary.
+    pub fn hash(&self, fs: &'f FileSystem<'f, C>) -> Result<&Hash> {
+        let mut borrow = self.0.borrow_mut();
+        let h = borrow.hash(fs)?;
+        Ok(unsafe {
+               // "upgrade" h's lifetime from that of the mutable borrow, based on invariant β
+               (h as *const Hash).as_ref().unwrap()
+           })
+    }
+
+    /// Get the content of this object, retrieving it from the FileSystem first if necessary.
+    pub fn content(&self, fs: &'f FileSystem<'f, C>) -> Result<&T> {
+        let mut borrow = self.0.borrow_mut();
+        let c = borrow.content(fs)?;
+        Ok(unsafe {
+               // "upgrade" c's lifetime from that of the mutable borrow, based on invariant β
+               (c as *const T).as_ref().unwrap()
+           })
+    }
+}
+
+impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
+    where T: LazyContent<'f, C>
+{
+    // Return a reference to PhantomData with the appropriate lifetime.  PhantomData is a zero-byte
+    // data structure, so lifetime isn't a relevant concept and upgrading its lifetime is a
+    // harmless hack.
     fn phantom_hack() -> &'f PhantomData<C> {
         let zero_bytes_live_forever: &PhantomData<C> = &PhantomData;
         unsafe {
@@ -45,19 +94,19 @@ impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
         }
     }
 
-    pub fn for_content(content: T) -> Self {
-        LazyHashedObject {
+    fn for_content(content: T) -> Self {
+        LazyInner {
             hash: None,
             content: Some(content),
-            _phantom: LazyHashedObject::<'f, C, T>::phantom_hack(),
+            _phantom: LazyInner::<'f, C, T>::phantom_hack(),
         }
     }
 
-    pub fn for_hash(hash: &Hash) -> Self {
-        LazyHashedObject {
+    fn for_hash(hash: &Hash) -> Self {
+        LazyInner {
             hash: Some(hash.clone()),
             content: None,
-            _phantom: LazyHashedObject::<'f, C, T>::phantom_hack(),
+            _phantom: LazyInner::<'f, C, T>::phantom_hack(),
         }
     }
 
@@ -69,7 +118,7 @@ impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
         }
 
         match self.content {
-            // based on the invariant, since hash is not set, content is set
+            // based on invariant α, since hash is None, content is Some(_)
             None => unreachable!(),
             Some(ref c) => {
                 self.hash = Some(c.store_in(fs)?);
@@ -78,28 +127,28 @@ impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
         }
     }
 
-    // TODO: I think 'b here means "however long the caller wants it to last" which isn't what we
-    // want..  It does, because this is unsafe!  This is sort of a "dynamic" lifetime..
-    pub fn hash<'a, 'b>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<&'b Hash> {
+    fn hash(&mut self, fs: &'f FileSystem<'f, C>) -> Result<&Hash> {
         self.ensure_hash(fs)?;
         match self.hash {
             None => unreachable!(),
             Some(ref h) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of h to that of self based on the invariant
+                       // "upgrade" the lifetime of h to that of self based on invariant β
                        (h as *const Hash).as_ref().unwrap()
                    })
             }
         }
     }
 
+    /// Ensure that self.content is not None.  This may require reading the content
+    /// from storage, so it may fail and thus returns a result.
     fn ensure_content<'a>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<()> {
         if let Some(_) = self.content {
             return Ok(());
         }
 
         match self.hash {
-            // based on the invariant, since content is not set, hash is set
+            // based on invariant α, since content None, hash is Some(_)
             None => unreachable!(),
             Some(ref hash) => {
                 self.content = Some(T::retrieve_from(fs, hash)?);
@@ -108,18 +157,18 @@ impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
         }
     }
 
-    // TODO: I think 'b here means "however long the caller wants it to last" which isn't
-    // what we want..
-    pub fn content<'a, 'b>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<&'b T> {
+    fn content(&mut self, fs: &'f FileSystem<'f, C>) -> Result<&T> {
         self.ensure_content(fs)?;
         match self.content {
             None => unreachable!(),
             Some(ref c) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of c to that of self based on the invariant
+                       // "upgrade" the lifetime of h to that of self based on invariant β
                        (c as *const T).as_ref().unwrap()
                    })
             }
         }
     }
 }
+
+// TODO: tests

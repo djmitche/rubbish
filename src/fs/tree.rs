@@ -4,7 +4,6 @@ use fs::fs::FileSystem;
 use std::collections::HashMap;
 use cas::Hash;
 use cas::CAS;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
@@ -18,7 +17,7 @@ pub struct Tree<'f, C: 'f + CAS>
     fs: &'f FileSystem<'f, C>,
 
     /// The lazily loaded data about this commit.
-    inner: RefCell<LazyHashedObject<'f, C, TreeContent<'f, C>>>,
+    inner: LazyHashedObject<'f, C, TreeContent<'f, C>>,
 }
 
 /// The lazily-loaded content of a tree
@@ -41,7 +40,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     pub fn for_hash(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Rc<Tree<'f, C>> {
         Rc::new(Tree {
                     fs: fs,
-                    inner: RefCell::new(LazyHashedObject::for_hash(hash)),
+                    inner: LazyHashedObject::for_hash(hash),
                 })
     }
 
@@ -53,25 +52,24 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
         };
         Rc::new(Tree {
                     fs: fs,
-                    inner: RefCell::new(LazyHashedObject::for_content(content)),
+                    inner: LazyHashedObject::for_content(content),
                 })
     }
 
     /// Get the hash for this tree
     pub fn hash(&self) -> Result<&Hash> {
-        let mut borrow = self.inner.borrow_mut();
-        borrow.hash(self.fs)
+        self.inner.hash(self.fs)
     }
 
     /// Get the children of this tree.
     pub fn children(&self) -> Result<&HashMap<String, Rc<Tree<'f, C>>>> {
-        let content = self.inner.borrow_mut().content(self.fs)?;
+        let content = self.inner.content(self.fs)?;
         Ok(&content.children)
     }
 
     /// Get the data at this tree.
     pub fn data(&self) -> Result<Option<&str>> {
-        let content = self.inner.borrow_mut().content(self.fs)?;
+        let content = self.inner.content(self.fs)?;
         Ok(match content.data {
                None => None,
                Some(ref s) => Some(s),
