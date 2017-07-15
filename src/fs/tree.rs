@@ -17,14 +17,14 @@ pub struct Tree<'f, C: 'f + CAS>
     fs: &'f FileSystem<'f, C>,
 
     /// The lazily loaded data about this commit.
-    inner: LazyHashedObject<'f, C, TreeContent<'f, C>>,
+    inner: Rc<LazyHashedObject<'f, C, TreeContent<'f, C>>>,
 }
 
 /// The lazily-loaded content of a tree
 #[derive(Debug)]
 struct TreeContent<'f, C: 'f + CAS> {
     data: Option<String>,
-    children: HashMap<String, Rc<Tree<'f, C>>>,
+    children: HashMap<String, Tree<'f, C>>,
 }
 
 /// A raw tree, as stored in the content-addressible storage.
@@ -37,23 +37,23 @@ struct RawTree {
 
 impl<'f, C: 'f + CAS> Tree<'f, C> {
     /// Return a refcounted tree for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Rc<Tree<'f, C>> {
-        Rc::new(Tree {
-                    fs: fs,
-                    inner: LazyHashedObject::for_hash(hash),
-                })
+    pub fn for_hash(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Tree<'f, C> {
+        Tree {
+            fs: fs,
+            inner: Rc::new(LazyHashedObject::for_hash(hash)),
+        }
     }
 
     /// Create a new, empty tree
-    pub fn empty(fs: &'f FileSystem<C>) -> Rc<Tree<'f, C>> {
+    pub fn empty(fs: &'f FileSystem<C>) -> Tree<'f, C> {
         let content = TreeContent {
             data: None,
             children: HashMap::new(),
         };
-        Rc::new(Tree {
-                    fs: fs,
-                    inner: LazyHashedObject::for_content(content),
-                })
+        Tree {
+            fs: fs,
+            inner: Rc::new(LazyHashedObject::for_content(content)),
+        }
     }
 
     /// Get the hash for this tree
@@ -62,7 +62,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     }
 
     /// Get the children of this tree.
-    pub fn children(&self) -> Result<&HashMap<String, Rc<Tree<'f, C>>>> {
+    pub fn children(&self) -> Result<&HashMap<String, Tree<'f, C>>> {
         let content = self.inner.content(self.fs)?;
         Ok(&content.children)
     }
@@ -184,12 +184,21 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     */
 }
 
+impl<'f, C: 'f + CAS> Clone for Tree<'f, C> {
+    fn clone(&self) -> Self {
+        Tree {
+            fs: self.fs,
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl<'f, C> LazyContent<'f, C> for TreeContent<'f, C>
     where C: 'f + CAS
 {
     fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self> {
         let raw: RawTree = fs.storage.retrieve(hash)?;
-        let mut children: HashMap<String, Rc<Tree<'f, C>>> = HashMap::new();
+        let mut children: HashMap<String, Tree<'f, C>> = HashMap::new();
         for elt in raw.children.iter() {
             children.insert(elt.0.clone(), Tree::for_hash(fs, &elt.1));
         }

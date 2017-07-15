@@ -1,7 +1,6 @@
 use fs::commit::Commit;
 use cas::Hash;
 use cas::CAS;
-use std::rc::Rc;
 
 // TODO: use pub(crate)
 
@@ -21,14 +20,14 @@ impl<'a, C> FileSystem<'a, C>
     }
 
     /// Get the root commit -- a well-known commit with no parents and an empty tree.
-    fn root_commit(&self) -> Rc<Commit<C>> {
+    fn root_commit(&self) -> Commit<C> {
         Commit::root(self)
     }
 
     /// Get a commit given its hash.
     ///
     /// Note that this does not actually load the commit; that occurs lazily, later.
-    fn get_commit(&self, hash: &Hash) -> Rc<Commit<C>> {
+    fn get_commit(&self, hash: &Hash) -> Commit<C> {
         // this function takes a reference to the hash because it may someday cache recently used
         // commits, at which point the hash would not be consumed.
         Commit::for_hash(self, hash)
