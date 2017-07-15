@@ -77,6 +77,17 @@ impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
                (c as *const T).as_ref().unwrap()
            })
     }
+
+    /// Does this lazy object already have a hash?
+    pub(crate) fn has_hash(&self) -> bool {
+        let borrow = self.0.borrow();
+        borrow.hash.is_some()
+    }
+
+    pub(crate) fn has_content(&self) -> bool {
+        let borrow = self.0.borrow();
+        borrow.content.is_some()
+    }
 }
 
 impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
@@ -171,4 +182,69 @@ impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
     }
 }
 
-// TODO: tests
+#[cfg(test)]
+mod test {
+    use super::*;
+    use cas::{LocalStorage, CAS};
+    use fs::FileSystem;
+    use cas::Hash;
+
+    #[derive(Debug, RustcDecodable, RustcEncodable)]
+    struct TestContent(String);
+
+    impl<'f, C> LazyContent<'f, C> for TestContent
+        where C: 'f + CAS
+    {
+        fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self> {
+            let val: TestContent = fs.storage.retrieve(hash)?;
+            Ok(val)
+        }
+
+        fn store_in(&self, fs: &'f FileSystem<'f, C>) -> Result<Hash> {
+            Ok(fs.storage.store(self)?)
+        }
+    }
+
+    const HELLO_WORLD_HASH: &'static str = "6142e96d0071656be3de08f89fc7ab9d374f74428ce61bd8c693efeac4d831aa";
+
+    #[test]
+    fn test_store() {
+        let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
+
+        // write a value as a lazy object, by getting its hash
+        let lho = LazyHashedObject::for_content(TestContent("hello, world".to_string()));
+        let hash = lho.hash(&fs).unwrap();
+        assert_eq!(hash, &Hash::from_hex(HELLO_WORLD_HASH));
+
+        // check that it's stored
+        assert!(storage.retrieve::<TestContent>(hash).is_ok());
+    }
+
+    #[test]
+    fn test_retrieve() {
+        let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
+
+        // write a value directly to storage
+        storage
+            .store(&TestContent("hello, world".to_string()))
+            .unwrap();
+
+        // and retrieve it as a lazy object
+        let lho = LazyHashedObject::for_hash(&Hash::from_hex(HELLO_WORLD_HASH));
+        let content: &TestContent = lho.content(&fs).unwrap();
+        assert_eq!(content.0, "hello, world".to_string());
+    }
+
+    #[test]
+    fn test_retrieve_fails() {
+        let storage = LocalStorage::new();
+        let fs = FileSystem::new(&storage);
+
+        // and retrieve it as a lazy object
+        let lho = LazyHashedObject::for_hash(&Hash::from_hex(HELLO_WORLD_HASH));
+        let res: Result<&TestContent> = lho.content(&fs);
+        assert!(res.is_err());
+    }
+}

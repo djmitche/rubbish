@@ -31,8 +31,7 @@ The entire application is, of course, a work in progress.
 
 ### Fs Refactor
 
-* Write modification methods for Tree
-* Write wrappers for them on Commit (see old code)
+* Write wrappers for modification methods on Commit (see old code)
 * Docs
 * Module-level example tests
 * Move fs out of the way so that Commit and Tree are just Rc<..>
@@ -65,6 +64,8 @@ Finish this application in a non-networked state
 
 ### Rename Things
 
+???
+
 * pile
 * heap
 * dumpster
@@ -76,3 +77,4 @@ Finish this application in a non-networked state
 * Enforce rustfmt
 * Run coverage
 * Rustish docs
+* use pub(..) to set finer visibility
