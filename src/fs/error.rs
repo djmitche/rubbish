@@ -1,4 +1,5 @@
 use cas;
+use std;
 
 error_chain! {
     errors {
@@ -7,4 +8,10 @@ error_chain! {
     foreign_links {
         Cas(cas::Error);
     }   
+}
+
+impl std::convert::From<Error> for std::fmt::Error {
+    fn from(_: Error) -> Self {
+        std::fmt::Error
+    }
 }

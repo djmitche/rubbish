@@ -20,14 +20,14 @@ impl<'a, C> FileSystem<'a, C>
     }
 
     /// Get the root commit -- a well-known commit with no parents and an empty tree.
-    fn root_commit(&self) -> Commit<C> {
+    pub fn root_commit(&self) -> Commit<C> {
         Commit::root(self)
     }
 
     /// Get a commit given its hash.
     ///
     /// Note that this does not actually load the commit; that occurs lazily, later.
-    fn get_commit(&self, hash: &Hash) -> Commit<C> {
+    pub fn get_commit(&self, hash: &Hash) -> Commit<C> {
         // this function takes a reference to the hash because it may someday cache recently used
         // commits, at which point the hash would not be consumed.
         Commit::for_hash(self, hash)
@@ -69,8 +69,8 @@ mod test {
         let fs = FileSystem::new(&storage);
         // make a grandchild of the root
         let cmt = Commit::root(&fs);
-        let cmt = Commit::make_child(&fs, cmt, Tree::empty(&fs)).unwrap();
-        let cmt = Commit::make_child(&fs, cmt, Tree::empty(&fs)).unwrap();
+        let cmt = cmt.make_child(Tree::empty(&fs)).unwrap();
+        let cmt = cmt.make_child(Tree::empty(&fs)).unwrap();
 
         let grandkid_hash = "d04edfc4e211330c9ec78651a026e4e63d12e38e82098f6c0c4e931a6f979dc8";
         assert_eq!(cmt.hash().unwrap(), &Hash::from_hex(grandkid_hash));
