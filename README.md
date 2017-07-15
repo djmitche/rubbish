@@ -35,6 +35,7 @@ The entire application is, of course, a work in progress.
 * Write wrappers for them on Commit (see old code)
 * Docs
 * Module-level example tests
+* Move fs out of the way so that Commit and Tree are just Rc<..>
 
 ### Single-Hosted
 
