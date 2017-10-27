@@ -9,10 +9,6 @@ use rustc_serialize::{Decodable, Encodable};
 /// Type Storage provides a distributed content-addressible storage pool.  The content
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
 /// traits `Decodable` and `Encodable`.
-///
-/// # TODO
-///
-/// * Actually be distributed
 #[derive(Debug)]
 pub struct Storage {
     map: RwLock<HashMap<Hash, Content>>,

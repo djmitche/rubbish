@@ -16,10 +16,6 @@
 //! user must guard against this possibility, so there is no need to waste time
 //! verifying type IDs within this module.
 //!
-//! # TODO
-//!
-//!  * Use Serde instead of rustc_serialize
-//!
 //! # Examples
 //!
 //! ```

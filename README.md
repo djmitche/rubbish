@@ -36,11 +36,6 @@ Finish this application in a non-networked state
 * Implement tip API
 * Implement generational garbage collection between cas and fs
 
-### Misc
-
-* use pub(crate) (rust 1.19?)
-* use serde, or better yet some write-based thing so we don't depend on repeatability of hash ordering
-
 ### Distribute
 
 * Build a network interface
@@ -70,4 +65,6 @@ Finish this application in a non-networked state
 * Enforce rustfmt
 * Run coverage
 * Rustish docs
+* fix unwrap's in CAS (need to cast Poison to cas::Error)
 * use pub(..) to set finer visibility
+* use serde, or better yet some write-based thing so we don't depend on repeatability of hash ordering
