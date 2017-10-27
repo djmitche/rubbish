@@ -1,5 +1,6 @@
 use cas::error::*;
 use super::hash::Hash;
+use super::gc::{GarbageCollection, GarbageCollector};
 use super::traits::CAS;
 use super::content::Content;
 use std::collections::HashMap;
@@ -9,33 +10,74 @@ use rustc_serialize::{Decodable, Encodable};
 /// Type Storage provides a distributed content-addressible storage pool.  The content
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
 /// traits `Decodable` and `Encodable`.
-#[derive(Debug)]
-pub struct Storage {
-    map: RwLock<HashMap<Hash, Content>>,
+pub struct Storage(RwLock<Inner>);
+
+struct Inner {
+    map: HashMap<Hash, (u64, Content)>,
+    garbage_generation: u64,
+    cur_generation: u64,
 }
 
 impl Storage {
     /// Create a new, empty storage pool.
     pub fn new() -> Storage {
-        Storage { map: RwLock::new(HashMap::new()) }
+        Storage(RwLock::new(Inner {
+                                map: HashMap::new(),
+                                garbage_generation: 0,
+                                cur_generation: 1,
+                            }))
     }
 }
 
 impl CAS for Storage {
     fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash> {
+        let mut inner = self.0.write().unwrap(); // XXX unwrap
+        let cur_generation = inner.cur_generation;
         let content = Content::new(value)?;
         let hash = content.hash();
-        self.map.write().unwrap().insert(hash.clone(), content); // XXX unwrap
+        inner.map.insert(hash.clone(), (cur_generation, content));
         // note that we assume no hash collisions of encoded values, since this is
         // not a security-sensitive context
         Ok(hash)
     }
 
     fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T> {
-        match self.map.read().unwrap().get(hash) { // XXX unwrap
+        let inner = self.0.read().unwrap(); // XXX unwrap
+        match inner.map.get(hash) {
             None => bail!("No object found"),
-            Some(encoded) => Ok(encoded.decode()?),
+            Some(tup) => Ok(tup.1.decode()?),
         }
+    }
+
+    fn touch(&self, hash: &Hash) -> Result<()> {
+        let inner = self.0.write().unwrap(); // XXX unwrap
+        match inner.map.get(hash) {
+            None => bail!("No object found"),
+            Some(_) => Ok(()),
+        }
+    }
+
+    fn begin_gc(&self) -> GarbageCollection {
+        let mut inner = self.0.write().unwrap(); // XXX unwrap
+        inner.cur_generation += 1;
+        GarbageCollection::new(self)
+    }
+}
+
+impl GarbageCollector for Storage {
+    fn end_gc(&self) {
+        let mut inner = self.0.write().unwrap(); // XXX unwrap
+        inner.garbage_generation += 1;
+        let garbage_generation = inner.garbage_generation;
+
+        // generate a new map containing only non-garbage
+        let mut new_map = HashMap::new();
+        for (k, v) in inner.map.drain() {
+            if v.0 > garbage_generation {
+                new_map.insert(k, v);
+            }
+        }
+        inner.map = new_map;
     }
 }
 
@@ -96,5 +138,35 @@ mod tests {
         let hash1 = storage.store(&"xyz".to_string()).unwrap();
         let hash2 = storage.store(&"xyz".to_string()).unwrap();
         assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn touch() {
+        let storage = super::Storage::new();
+
+        let hash1 = storage.store(&"xyz".to_string()).unwrap();
+        storage.touch(&hash1).unwrap();
+    }
+
+    #[test]
+    fn touch_fails() {
+        let storage = super::Storage::new();
+
+        assert!(storage.touch(&Hash::from_hex("1234")).is_err());
+    }
+
+    #[test]
+    fn gc() {
+        let storage = super::Storage::new();
+
+        let hash1 = storage.store(&"xyz".to_string()).unwrap();
+        let hash2 = storage.store(&"xyz".to_string()).unwrap();
+
+        let gc = storage.begin_gc();
+        storage.touch(&hash1).unwrap();
+        drop(gc);
+
+        // hash2 should be gone now
+        assert!(storage.retrieve::<String>(&hash2).is_err());
     }
 }
