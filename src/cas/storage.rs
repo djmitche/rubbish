@@ -1,6 +1,5 @@
 use cas::error::*;
 use super::hash::Hash;
-use super::gc::{GarbageCollection, GarbageCollector};
 use super::traits::CAS;
 use super::content::Content;
 use std::collections::HashMap;
@@ -50,21 +49,22 @@ impl CAS for Storage {
     }
 
     fn touch(&self, hash: &Hash) -> Result<()> {
-        let inner = self.0.write().unwrap(); // XXX unwrap
-        match inner.map.get(hash) {
+        let mut inner = self.0.write().unwrap(); // XXX unwrap
+        let cur_generation = inner.cur_generation;
+        match inner.map.remove(hash) {
             None => bail!("No object found"),
-            Some(_) => Ok(()),
+            Some(tup) => {
+                inner.map.insert(hash.clone(), (cur_generation, tup.1));
+                Ok(())
+            }
         }
     }
 
-    fn begin_gc(&self) -> GarbageCollection {
+    fn begin_gc(&self) {
         let mut inner = self.0.write().unwrap(); // XXX unwrap
         inner.cur_generation += 1;
-        GarbageCollection::new(self)
     }
-}
 
-impl GarbageCollector for Storage {
     fn end_gc(&self) {
         let mut inner = self.0.write().unwrap(); // XXX unwrap
         inner.garbage_generation += 1;
@@ -159,14 +159,21 @@ mod tests {
     fn gc() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"xyz".to_string()).unwrap();
-        let hash2 = storage.store(&"xyz".to_string()).unwrap();
+        let hash1 = storage.store(&"abc".to_string()).unwrap();
+        let hash2 = storage.store(&"def".to_string()).unwrap();
+        let hash3 = storage.store(&"ghi".to_string()).unwrap();
+        let hash4 = storage.store(&"jkl".to_string()).unwrap();
 
-        let gc = storage.begin_gc();
+        storage.begin_gc();
         storage.touch(&hash1).unwrap();
-        drop(gc);
+        storage.retrieve::<String>(&hash2).unwrap();
+        storage.store(&"ghi".to_string()).unwrap(); // hash3
+        storage.end_gc();
 
-        // hash2 should be gone now
-        assert!(storage.retrieve::<String>(&hash2).is_err());
+        // hash4 should be gone now
+        assert!(storage.retrieve::<String>(&hash1).is_ok()); // touched
+        assert!(storage.retrieve::<String>(&hash2).is_err()); // retrieved
+        assert!(storage.retrieve::<String>(&hash3).is_ok()); // stored
+        assert!(storage.retrieve::<String>(&hash4).is_err()); // not referenced
     }
 }

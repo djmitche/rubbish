@@ -35,6 +35,7 @@ Finish this application in a non-networked state
 
 * Implement tip API
 * Implement generational garbage collection between cas and fs
+    * add a GarbageCollectionRun struct that calls begin/end in RAII fashion
 
 ### Distribute
 

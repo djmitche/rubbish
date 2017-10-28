@@ -1,5 +1,4 @@
 use cas::error::*;
-use super::gc::GarbageCollection;
 use super::hash::Hash;
 use rustc_serialize::{Decodable, Encodable};
 
@@ -16,9 +15,10 @@ use rustc_serialize::{Decodable, Encodable};
 /// ## Garbage Collection
 ///
 /// Garbage collection is implemented in "generations".  A garbage collection sweep begins with a
-/// call to `begin_gc`.  The caller should then `retrieve`, `touch`, or `store` all non-garbage
-/// objects before dropping the returned GarbageCollection instance.  Once that instance is
-/// dropped, all older objects are considered garbage and may be deleted.
+/// call to `begin_gc`.  The caller should then `touch` or `store` all non-garbage objects before
+/// dropping the returned GarbageCollection instance.  Once that instance is dropped, all older
+/// objects are considered garbage and may be deleted.  Note that retrieving an object does not
+/// mark it as used.
 ///
 /// This mode of garbage collection has additional benefits:
 ///
@@ -43,6 +43,10 @@ pub trait CAS {
     fn touch(&self, hash: &Hash) -> Result<()>;
 
     /// Begin a garbage collection round.  Before dropping the resulting `GarbageCollection`
-    /// instance, `retrieve`, `touch`, or `store` all non-garbage objects.
-    fn begin_gc(&self) -> GarbageCollection;
+    /// instance, `touch` or `store` all non-garbage objects.
+    fn begin_gc(&self);
+
+    /// Complete a garbage collection round.  This should be called exactly once per call
+    /// to `begin_gc`.  Use `GarbageCollectionRound` to ensure this. (TODO)
+    fn end_gc(&self);
 }
