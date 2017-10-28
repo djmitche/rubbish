@@ -9,10 +9,10 @@
 //! let storage = Storage::new();
 //! let fs = FileSystem::new(&storage);
 //!
-//! fn child<'f, C: 'f + CAS>(parent: Commit<'f, C>,
+//! fn child<'f, ST: 'f + CAS>(parent: Commit<'f, ST>,
 //!                           path: &[&str],
 //!                           data: String)
-//!                           -> Result<Commit<'f, C>, Error> {
+//!                           -> Result<Commit<'f, ST>, Error> {
 //!     let child_tree = parent.tree()?.write(path, data)?;
 //!     let child = parent.make_child(child_tree)?;
 //!     Ok(child)

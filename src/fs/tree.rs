@@ -11,21 +11,22 @@ use std::rc::Rc;
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
 /// `foo/bar/bing`).
-pub struct Tree<'f, C: 'f + CAS>
-    where C: 'f + CAS
+pub struct Tree<'f, ST: 'f + CAS>
+where
+    ST: 'f + CAS,
 {
     /// The filesystem within which this Tree exists
-    fs: &'f FileSystem<'f, C>,
+    fs: &'f FileSystem<'f, ST>,
 
     /// The lazily loaded data about this commit.
-    inner: Rc<LazyHashedObject<'f, C, TreeContent<'f, C>>>,
+    inner: Rc<LazyHashedObject<'f, ST, TreeContent<'f, ST>>>,
 }
 
 /// The lazily-loaded content of a tree
 #[derive(Debug)]
-struct TreeContent<'f, C: 'f + CAS> {
+struct TreeContent<'f, ST: 'f + CAS> {
     data: Option<String>,
-    children: HashMap<String, Tree<'f, C>>,
+    children: HashMap<String, Tree<'f, ST>>,
 }
 
 /// A raw tree, as stored in the content-addressible storage.
@@ -36,9 +37,9 @@ struct RawTree {
 }
 
 
-impl<'f, C: 'f + CAS> Tree<'f, C> {
+impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// Return a Tree for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Tree<'f, C> {
+    pub fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Tree<'f, ST> {
         Tree {
             fs: fs,
             inner: Rc::new(LazyHashedObject::for_hash(hash)),
@@ -46,7 +47,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     }
 
     /// return a Tree for the given TreeContent
-    fn for_content(fs: &'f FileSystem<C>, content: TreeContent<'f, C>) -> Tree<'f, C> {
+    fn for_content(fs: &'f FileSystem<ST>, content: TreeContent<'f, ST>) -> Tree<'f, ST> {
         Tree {
             fs: fs,
             inner: Rc::new(LazyHashedObject::for_content(content)),
@@ -54,12 +55,14 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     }
 
     /// Create a new, empty tree
-    pub fn empty(fs: &'f FileSystem<C>) -> Tree<'f, C> {
-        Tree::for_content(fs,
-                          TreeContent {
-                              data: None,
-                              children: HashMap::new(),
-                          })
+    pub fn empty(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
+        Tree::for_content(
+            fs,
+            TreeContent {
+                data: None,
+                children: HashMap::new(),
+            },
+        )
     }
 
     /// Get the hash for this tree
@@ -68,7 +71,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     }
 
     /// Get the children of this tree.
-    pub fn children(&self) -> Result<&HashMap<String, Tree<'f, C>>> {
+    pub fn children(&self) -> Result<&HashMap<String, Tree<'f, ST>>> {
         let content = self.inner.content(self.fs)?;
         Ok(&content.children)
     }
@@ -77,9 +80,9 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     pub fn data(&self) -> Result<Option<&str>> {
         let content = self.inner.content(self.fs)?;
         Ok(match content.data {
-               None => None,
-               Some(ref s) => Some(s),
-           })
+            None => None,
+            Some(ref s) => Some(s),
+        })
     }
 
     /// Return a tree containing new value at the designated path, replacing any
@@ -92,7 +95,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write(&self, path: &[&str], data: String) -> Result<Tree<'f, C>> {
+    pub fn write(&self, path: &[&str], data: String) -> Result<Tree<'f, ST>> {
         self.modify(path, Some(data))
     }
 
@@ -104,7 +107,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, path: &[&str]) -> Result<Tree<'f, C>> {
+    pub fn remove(self, path: &[&str]) -> Result<Tree<'f, ST>> {
         self.modify(path, None)
     }
 
@@ -122,7 +125,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
 
     /// Set the data at the given path, returning a new Tree that shares some nodes with the
     /// original via path copying.
-    fn modify(&self, path: &[&str], data: Option<String>) -> Result<Tree<'f, C>> {
+    fn modify(&self, path: &[&str], data: Option<String>) -> Result<Tree<'f, ST>> {
         if path.len() > 0 {
             let elt = path[0];
             let mut newchildren = self.children()?.clone();
@@ -176,7 +179,7 @@ impl<'f, C: 'f + CAS> Tree<'f, C> {
     }
 }
 
-impl<'f, C: 'f + CAS> Clone for Tree<'f, C> {
+impl<'f, ST: 'f + CAS> Clone for Tree<'f, ST> {
     fn clone(&self) -> Self {
         Tree {
             fs: self.fs,
@@ -185,7 +188,7 @@ impl<'f, C: 'f + CAS> Clone for Tree<'f, C> {
     }
 }
 
-impl<'f, C: 'f + CAS> Debug for Tree<'f, C> {
+impl<'f, ST: 'f + CAS> Debug for Tree<'f, ST> {
     fn fmt(&self, f: &mut Formatter) -> StdResult<(), FmtError> {
         write!(f, "Tree")?;
         if self.inner.has_hash() {
@@ -205,22 +208,23 @@ impl<'f, C: 'f + CAS> Debug for Tree<'f, C> {
     }
 }
 
-impl<'f, C> LazyContent<'f, C> for TreeContent<'f, C>
-    where C: 'f + CAS
+impl<'f, ST> LazyContent<'f, ST> for TreeContent<'f, ST>
+where
+    ST: 'f + CAS,
 {
-    fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self> {
+    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self> {
         let raw: RawTree = fs.storage.retrieve(hash)?;
-        let mut children: HashMap<String, Tree<'f, C>> = HashMap::new();
+        let mut children: HashMap<String, Tree<'f, ST>> = HashMap::new();
         for elt in raw.children.iter() {
             children.insert(elt.0.clone(), Tree::for_hash(fs, &elt.1));
         }
         Ok(TreeContent {
-               data: raw.data,
-               children: children,
-           })
+            data: raw.data,
+            children: children,
+        })
     }
 
-    fn store_in(&self, fs: &'f FileSystem<'f, C>) -> Result<Hash> {
+    fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Result<Hash> {
         let mut children: Vec<(String, Hash)> = vec![];
         children.reserve(self.children.len());
         for (k, v) in self.children.iter() {
@@ -266,7 +270,7 @@ mod test {
         assert!(cmt.data().is_err());
     }
 
-    fn make_test_tree<'f, C: 'f + CAS>(fs: &'f FileSystem<C>) -> Tree<'f, C> {
+    fn make_test_tree<'f, ST: 'f + CAS>(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
         Tree::empty(fs)
             .write(&["sub", "one"], "1".to_string())
             .unwrap()
@@ -281,32 +285,40 @@ mod test {
         let storage = LocalStorage::new();
         let fs = FileSystem::new(&storage);
         let tree = make_test_tree(&fs);
-        assert_eq!(format!("{:?}", tree),
-                   "Tree [None, \
+        assert_eq!(
+            format!("{:?}", tree),
+            "Tree [None, \
                         sub: Tree [None, \
                             one: Tree [Some(\"1\")], \
                             two: Tree [Some(\"2\")]], \
-                        three: Tree [Some(\"3\")]]");
+                        three: Tree [Some(\"3\")]]"
+        );
 
         let tree = Tree::for_hash(&fs, tree.hash().unwrap());
-        assert_eq!(format!("{:?}", tree),
-                   "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001");
+        assert_eq!(
+            format!("{:?}", tree),
+            "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001"
+        );
 
         tree.read(&["sub"]).unwrap();
-        assert_eq!(format!("{:?}", tree),
-                   "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001 [None, \
+        assert_eq!(
+            format!("{:?}", tree),
+            "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001 [None, \
                         sub: Tree@e126739679be2e5f3eaa8d45a5737c15ead9ff0987af862176ec5b0cbb5fb92f [None, \
                             one: Tree@ce9fff9bafb150d24fe2efa3aba6257548c9bd182173e51041cbff7948286c35, \
                             two: Tree@0e9c430779ed1a97e66b6bbff2dc41caef63d63558182c451237085b806d841a], \
-                        three: Tree@4c5f9e63a341421c9382639826104e0133ea8604134b410574f5734bbddd9c3e]");
+                        three: Tree@4c5f9e63a341421c9382639826104e0133ea8604134b410574f5734bbddd9c3e]"
+        );
 
         tree.read(&["sub", "two"]).unwrap();
-        assert_eq!(format!("{:?}", tree),
-                   "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001 [None, \
+        assert_eq!(
+            format!("{:?}", tree),
+            "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001 [None, \
                         sub: Tree@e126739679be2e5f3eaa8d45a5737c15ead9ff0987af862176ec5b0cbb5fb92f [None, \
                             one: Tree@ce9fff9bafb150d24fe2efa3aba6257548c9bd182173e51041cbff7948286c35, \
                             two: Tree@0e9c430779ed1a97e66b6bbff2dc41caef63d63558182c451237085b806d841a [Some(\"2\")]], \
-                        three: Tree@4c5f9e63a341421c9382639826104e0133ea8604134b410574f5734bbddd9c3e]");
+                        three: Tree@4c5f9e63a341421c9382639826104e0133ea8604134b410574f5734bbddd9c3e]"
+        );
     }
 
     #[test]
@@ -358,8 +370,12 @@ mod test {
         let tree = tree.write(&["foo", "bar"], "def".to_string()).unwrap();
 
         assert_eq!(tree.read(&["foo", "bar"]).unwrap(), Some("def"));
-        assert_eq!(tree.hash().unwrap(),
-                   &Hash::from_hex("09b0b66433fe7cd79470acbe3e4d490c33bcc8396607201f0d288e328e81e1be"));
+        assert_eq!(
+            tree.hash().unwrap(),
+            &Hash::from_hex(
+                "09b0b66433fe7cd79470acbe3e4d490c33bcc8396607201f0d288e328e81e1be",
+            )
+        );
     }
 
     #[test]

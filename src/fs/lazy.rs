@@ -12,15 +12,16 @@ use std::marker::PhantomData;
 /// only when requested; or it can be created with content, in which case the hash is only
 /// determined when requested (with the object stored in the FileSystem at that time).
 #[derive(Debug)]
-pub struct LazyHashedObject<'f, C: 'f + CAS, T: LazyContent<'f, C>>(RefCell<LazyInner<'f, C, T>>);
+pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(RefCell<LazyInner<'f, ST, T>>);
 
 /// LazyInner proivdes interior mutability for LazyHashedObject.
 ///
 /// INVARIANT α: at least one of `hash` and `content` is always `Some(_)`.
 /// INVARIANT β: a `Some(_)` value for `hash` or `content` is immutable.
 #[derive(Debug)]
-struct LazyInner<'f, C: 'f + CAS, T>
-    where T: LazyContent<'f, C>
+struct LazyInner<'f, ST: 'f + CAS, T>
+where
+    T: LazyContent<'f, ST>,
 {
     /// The hash of this object, if it has already been calculated
     hash: Option<Hash>,
@@ -30,21 +31,22 @@ struct LazyInner<'f, C: 'f + CAS, T>
 
     // use the type parameters, since rust does not consider a trait bound
     // to be a "use' of a type paramter
-    _phantom: &'f PhantomData<C>,
+    _phantom: &'f PhantomData<ST>,
 }
 
 /// LazyContent bounds content that can be stored as a `LazyHashedObject`, providing
 /// methods to retrieve and store the content in a FileSystem.
-pub trait LazyContent<'f, C: 'f + CAS>: Sized {
+pub trait LazyContent<'f, ST: 'f + CAS>: Sized {
     /// Retrive this content from the given FileSystem
-    fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self>;
+    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self>;
 
     /// Store the content in the given FileSystem, returning its hash
-    fn store_in<'a>(&'a self, fs: &'f FileSystem<'f, C>) -> Result<Hash>;
+    fn store_in<'a>(&'a self, fs: &'f FileSystem<'f, ST>) -> Result<Hash>;
 }
 
-impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
-    where T: LazyContent<'f, C>
+impl<'f, ST: 'f + CAS, T> LazyHashedObject<'f, ST, T>
+where
+    T: LazyContent<'f, ST>,
 {
     /// Create a new LazyHashedObject containing the given content.  This is a lazy operation, so
     /// no storage occurs until the object's hash is requested.
@@ -59,23 +61,23 @@ impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
     }
 
     /// Get the hash for this object, writing its content to the FileSystem first if necessary.
-    pub fn hash(&self, fs: &'f FileSystem<'f, C>) -> Result<&Hash> {
+    pub fn hash(&self, fs: &'f FileSystem<'f, ST>) -> Result<&Hash> {
         let mut borrow = self.0.borrow_mut();
         let h = borrow.hash(fs)?;
         Ok(unsafe {
-               // "upgrade" h's lifetime from that of the mutable borrow, based on invariant β
-               (h as *const Hash).as_ref().unwrap()
-           })
+            // "upgrade" h's lifetime from that of the mutable borrow, based on invariant β
+            (h as *const Hash).as_ref().unwrap()
+        })
     }
 
     /// Get the content of this object, retrieving it from the FileSystem first if necessary.
-    pub fn content(&self, fs: &'f FileSystem<'f, C>) -> Result<&T> {
+    pub fn content(&self, fs: &'f FileSystem<'f, ST>) -> Result<&T> {
         let mut borrow = self.0.borrow_mut();
         let c = borrow.content(fs)?;
         Ok(unsafe {
-               // "upgrade" c's lifetime from that of the mutable borrow, based on invariant β
-               (c as *const T).as_ref().unwrap()
-           })
+            // "upgrade" c's lifetime from that of the mutable borrow, based on invariant β
+            (c as *const T).as_ref().unwrap()
+        })
     }
 
     /// Does this lazy object already have a hash?
@@ -90,16 +92,17 @@ impl<'f, C: 'f + CAS, T> LazyHashedObject<'f, C, T>
     }
 }
 
-impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
-    where T: LazyContent<'f, C>
+impl<'f, ST: 'f + CAS, T> LazyInner<'f, ST, T>
+where
+    T: LazyContent<'f, ST>,
 {
     // Return a reference to PhantomData with the appropriate lifetime.  PhantomData is a zero-byte
     // data structure, so lifetime isn't a relevant concept and upgrading its lifetime is a
     // harmless hack.
-    fn phantom_hack() -> &'f PhantomData<C> {
-        let zero_bytes_live_forever: &PhantomData<C> = &PhantomData;
+    fn phantom_hack() -> &'f PhantomData<ST> {
+        let zero_bytes_live_forever: &PhantomData<ST> = &PhantomData;
         unsafe {
-            (zero_bytes_live_forever as *const PhantomData<C>)
+            (zero_bytes_live_forever as *const PhantomData<ST>)
                 .as_ref()
                 .unwrap()
         }
@@ -109,7 +112,7 @@ impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
         LazyInner {
             hash: None,
             content: Some(content),
-            _phantom: LazyInner::<'f, C, T>::phantom_hack(),
+            _phantom: LazyInner::<'f, ST, T>::phantom_hack(),
         }
     }
 
@@ -117,13 +120,13 @@ impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
         LazyInner {
             hash: Some(hash.clone()),
             content: None,
-            _phantom: LazyInner::<'f, C, T>::phantom_hack(),
+            _phantom: LazyInner::<'f, ST, T>::phantom_hack(),
         }
     }
 
     /// Ensure that self.hash is not None. This may write the commit to storage,
     /// so it may fail and thus returns a Result.
-    fn ensure_hash<'a>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<()> {
+    fn ensure_hash<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Result<()> {
         if let Some(_) = self.hash {
             return Ok(());
         }
@@ -138,22 +141,22 @@ impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
         }
     }
 
-    fn hash(&mut self, fs: &'f FileSystem<'f, C>) -> Result<&Hash> {
+    fn hash(&mut self, fs: &'f FileSystem<'f, ST>) -> Result<&Hash> {
         self.ensure_hash(fs)?;
         match self.hash {
             None => unreachable!(),
             Some(ref h) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of h to that of self based on invariant β
-                       (h as *const Hash).as_ref().unwrap()
-                   })
+                    // "upgrade" the lifetime of h to that of self based on invariant β
+                    (h as *const Hash).as_ref().unwrap()
+                })
             }
         }
     }
 
     /// Ensure that self.content is not None.  This may require reading the content
     /// from storage, so it may fail and thus returns a result.
-    fn ensure_content<'a>(&'a mut self, fs: &'f FileSystem<'f, C>) -> Result<()> {
+    fn ensure_content<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Result<()> {
         if let Some(_) = self.content {
             return Ok(());
         }
@@ -168,15 +171,15 @@ impl<'f, C: 'f + CAS, T> LazyInner<'f, C, T>
         }
     }
 
-    fn content(&mut self, fs: &'f FileSystem<'f, C>) -> Result<&T> {
+    fn content(&mut self, fs: &'f FileSystem<'f, ST>) -> Result<&T> {
         self.ensure_content(fs)?;
         match self.content {
             None => unreachable!(),
             Some(ref c) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of h to that of self based on invariant β
-                       (c as *const T).as_ref().unwrap()
-                   })
+                    // "upgrade" the lifetime of h to that of self based on invariant β
+                    (c as *const T).as_ref().unwrap()
+                })
             }
         }
     }
@@ -192,15 +195,16 @@ mod test {
     #[derive(Debug, RustcDecodable, RustcEncodable)]
     struct TestContent(String);
 
-    impl<'f, C> LazyContent<'f, C> for TestContent
-        where C: 'f + CAS
+    impl<'f, ST> LazyContent<'f, ST> for TestContent
+    where
+        ST: 'f + CAS,
     {
-        fn retrieve_from(fs: &'f FileSystem<'f, C>, hash: &Hash) -> Result<Self> {
+        fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self> {
             let val: TestContent = fs.storage.retrieve(hash)?;
             Ok(val)
         }
 
-        fn store_in(&self, fs: &'f FileSystem<'f, C>) -> Result<Hash> {
+        fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Result<Hash> {
             Ok(fs.storage.store(self)?)
         }
     }

@@ -8,26 +8,27 @@ use cas::CAS;
 /// retrieved from storage lazily (as necessary).  Reading occurs when values are requested, and
 /// storage occurs when a hash is generated.
 #[derive(Debug)]
-pub struct FileSystem<'a, C: 'a + CAS> {
-    pub storage: &'a C,
+pub struct FileSystem<'a, ST: 'a + CAS> {
+    pub storage: &'a ST,
 }
 
-impl<'a, C> FileSystem<'a, C>
-    where C: 'a + CAS
+impl<'a, ST> FileSystem<'a, ST>
+where
+    ST: 'a + CAS,
 {
-    pub fn new(storage: &'a C) -> FileSystem<'a, C> {
+    pub fn new(storage: &'a ST) -> FileSystem<'a, ST> {
         FileSystem { storage: storage }
     }
 
     /// Get the root commit -- a well-known commit with no parents and an empty tree.
-    pub fn root_commit(&self) -> Commit<C> {
+    pub fn root_commit(&self) -> Commit<ST> {
         Commit::root(self)
     }
 
     /// Get a commit given its hash.
     ///
     /// Note that this does not actually load the commit; that occurs lazily, later.
-    pub fn get_commit(&self, hash: &Hash) -> Commit<C> {
+    pub fn get_commit(&self, hash: &Hash) -> Commit<ST> {
         // this function takes a reference to the hash because it may someday cache recently used
         // commits, at which point the hash would not be consumed.
         Commit::for_hash(self, hash)
@@ -80,7 +81,9 @@ mod test {
 
         // check the parent hash
         let kid_hash = "7d134816ae341dd4cac908b4626f017412ea7d11536ad2db9ac014ff9772b129";
-        assert_eq!(cmt.parents().unwrap()[0].hash().unwrap(),
-                   &Hash::from_hex(kid_hash));
+        assert_eq!(
+            cmt.parents().unwrap()[0].hash().unwrap(),
+            &Hash::from_hex(kid_hash)
+        );
     }
 }
