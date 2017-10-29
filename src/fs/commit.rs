@@ -6,8 +6,6 @@ use cas::Hash;
 use cas::CAS;
 use std::rc::Rc;
 
-// TODO: use pub(crate)
-
 /// A Commit represents the state of the filesystem, and links to previous (parent) commits.
 #[derive(Debug)]
 pub struct Commit<'f, ST: 'f + CAS> {
@@ -37,8 +35,8 @@ impl<'f, ST> Commit<'f, ST>
 where
     ST: 'f + CAS,
 {
-    /// Return a refcounted root commit
-    pub fn root(fs: &'f FileSystem<'f, ST>) -> Commit<'f, ST> {
+    /// Return a refcounted root commit.  Use `FileSystem::root_commit` instead.
+    pub(super) fn root(fs: &'f FileSystem<'f, ST>) -> Commit<'f, ST> {
         let content = CommitContent {
             parents: vec![],
             tree: Tree::empty(fs),
@@ -49,8 +47,8 @@ where
         }
     }
 
-    /// Return a refcounted commit for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Commit<'f, ST> {
+    /// Return a refcounted commit for the given hash.  Use `FileSystem::get_commit` instead.
+    pub(super) fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Commit<'f, ST> {
         Commit {
             fs: fs,
             inner: Rc::new(LazyHashedObject::for_hash(hash)),

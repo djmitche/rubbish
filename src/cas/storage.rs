@@ -12,7 +12,7 @@ use std::convert::From;
 /// traits `Decodable` and `Encodable`.
 pub struct Storage(RwLock<Inner>);
 
-pub(crate) struct Inner {
+pub(super) struct Inner {
     map: HashMap<Hash, (u64, Content)>,
     garbage_generation: u64,
     cur_generation: u64,

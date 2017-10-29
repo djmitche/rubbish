@@ -5,14 +5,12 @@ use cas::CAS;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 
-// TODO: use pub(crate)
-
 /// A LazyHashedObject is an object which can be stored by hash in a FileSystem and retrieved from
 /// one.  It can be created with a hash, in which case the object's content (of type T) is loaded
 /// only when requested; or it can be created with content, in which case the hash is only
 /// determined when requested (with the object stored in the FileSystem at that time).
 #[derive(Debug)]
-pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(RefCell<LazyInner<'f, ST, T>>);
+pub(super) struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(RefCell<LazyInner<'f, ST, T>>);
 
 /// LazyInner proivdes interior mutability for LazyHashedObject.
 ///
@@ -36,7 +34,7 @@ where
 
 /// LazyContent bounds content that can be stored as a `LazyHashedObject`, providing
 /// methods to retrieve and store the content in a FileSystem.
-pub trait LazyContent<'f, ST: 'f + CAS>: Sized {
+pub(super) trait LazyContent<'f, ST: 'f + CAS>: Sized {
     /// Retrive this content from the given FileSystem
     fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self>;
 
@@ -50,18 +48,18 @@ where
 {
     /// Create a new LazyHashedObject containing the given content.  This is a lazy operation, so
     /// no storage occurs until the object's hash is requested.
-    pub fn for_content(content: T) -> Self {
+    pub(super) fn for_content(content: T) -> Self {
         LazyHashedObject(RefCell::new(LazyInner::for_content(content)))
     }
 
     /// Create a new LazyHashedObject with the given hash.  This is a lazy operation, so the
     /// content is not loaded until requested.
-    pub fn for_hash(hash: &Hash) -> Self {
+    pub(super) fn for_hash(hash: &Hash) -> Self {
         LazyHashedObject(RefCell::new(LazyInner::for_hash(hash)))
     }
 
     /// Get the hash for this object, writing its content to the FileSystem first if necessary.
-    pub fn hash(&self, fs: &'f FileSystem<'f, ST>) -> Result<&Hash> {
+    pub(super) fn hash(&self, fs: &'f FileSystem<'f, ST>) -> Result<&Hash> {
         let mut borrow = self.0.borrow_mut();
         let h = borrow.hash(fs)?;
         Ok(unsafe {
@@ -71,7 +69,7 @@ where
     }
 
     /// Get the content of this object, retrieving it from the FileSystem first if necessary.
-    pub fn content(&self, fs: &'f FileSystem<'f, ST>) -> Result<&T> {
+    pub(super) fn content(&self, fs: &'f FileSystem<'f, ST>) -> Result<&T> {
         let mut borrow = self.0.borrow_mut();
         let c = borrow.content(fs)?;
         Ok(unsafe {
@@ -81,12 +79,12 @@ where
     }
 
     /// Does this lazy object already have a hash?
-    pub(crate) fn has_hash(&self) -> bool {
+    pub(super) fn has_hash(&self) -> bool {
         let borrow = self.0.borrow();
         borrow.hash.is_some()
     }
 
-    pub(crate) fn has_content(&self) -> bool {
+    pub(super) fn has_content(&self) -> bool {
         let borrow = self.0.borrow();
         borrow.content.is_some()
     }

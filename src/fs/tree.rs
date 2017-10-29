@@ -39,7 +39,7 @@ struct RawTree {
 
 impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// Return a Tree for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Tree<'f, ST> {
+    pub(super) fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Tree<'f, ST> {
         Tree {
             fs: fs,
             inner: Rc::new(LazyHashedObject::for_hash(hash)),
@@ -55,7 +55,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     }
 
     /// Create a new, empty tree
-    pub fn empty(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
+    pub(super) fn empty(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
         Tree::for_content(
             fs,
             TreeContent {
@@ -71,13 +71,13 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     }
 
     /// Get the children of this tree.
-    pub fn children(&self) -> Result<&HashMap<String, Tree<'f, ST>>> {
+    fn children(&self) -> Result<&HashMap<String, Tree<'f, ST>>> {
         let content = self.inner.content(self.fs)?;
         Ok(&content.children)
     }
 
     /// Get the data at this tree.
-    pub fn data(&self) -> Result<Option<&str>> {
+    fn data(&self) -> Result<Option<&str>> {
         let content = self.inner.content(self.fs)?;
         Ok(match content.data {
             None => None,

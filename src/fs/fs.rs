@@ -2,14 +2,12 @@ use fs::commit::Commit;
 use cas::Hash;
 use cas::CAS;
 
-// TODO: use pub(crate)
-
 /// A FileSystem encapsulates commits, trees, and so on. These objects are stored into and
 /// retrieved from storage lazily (as necessary).  Reading occurs when values are requested, and
 /// storage occurs when a hash is generated.
 #[derive(Debug)]
 pub struct FileSystem<'a, ST: 'a + CAS> {
-    pub storage: &'a ST,
+    pub(super) storage: &'a ST,
 }
 
 impl<'a, ST> FileSystem<'a, ST>
