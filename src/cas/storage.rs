@@ -3,15 +3,16 @@ use super::hash::Hash;
 use super::traits::CAS;
 use super::content::Content;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{RwLock, PoisonError, RwLockReadGuard, RwLockWriteGuard};
 use rustc_serialize::{Decodable, Encodable};
+use std::convert::From;
 
 /// Type Storage provides a distributed content-addressible storage pool.  The content
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
 /// traits `Decodable` and `Encodable`.
 pub struct Storage(RwLock<Inner>);
 
-struct Inner {
+pub(crate) struct Inner {
     map: HashMap<Hash, (u64, Content)>,
     garbage_generation: u64,
     cur_generation: u64,
@@ -21,16 +22,16 @@ impl Storage {
     /// Create a new, empty storage pool.
     pub fn new() -> Storage {
         Storage(RwLock::new(Inner {
-                                map: HashMap::new(),
-                                garbage_generation: 0,
-                                cur_generation: 1,
-                            }))
+            map: HashMap::new(),
+            garbage_generation: 0,
+            cur_generation: 1,
+        }))
     }
 }
 
 impl CAS for Storage {
     fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash> {
-        let mut inner = self.0.write().unwrap(); // XXX unwrap
+        let mut inner = self.0.write()?;
         let cur_generation = inner.cur_generation;
         let content = Content::new(value)?;
         let hash = content.hash();
@@ -41,7 +42,7 @@ impl CAS for Storage {
     }
 
     fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T> {
-        let inner = self.0.read().unwrap(); // XXX unwrap
+        let inner = self.0.read()?;
         match inner.map.get(hash) {
             None => bail!("No object found"),
             Some(tup) => Ok(tup.1.decode()?),
@@ -49,7 +50,7 @@ impl CAS for Storage {
     }
 
     fn touch(&self, hash: &Hash) -> Result<()> {
-        let mut inner = self.0.write().unwrap(); // XXX unwrap
+        let mut inner = self.0.write()?;
         let cur_generation = inner.cur_generation;
         match inner.map.remove(hash) {
             None => bail!("No object found"),
@@ -60,13 +61,14 @@ impl CAS for Storage {
         }
     }
 
-    fn begin_gc(&self) {
-        let mut inner = self.0.write().unwrap(); // XXX unwrap
+    fn begin_gc(&self) -> Result<()> {
+        let mut inner = self.0.write()?;
         inner.cur_generation += 1;
+        Ok(())
     }
 
-    fn end_gc(&self) {
-        let mut inner = self.0.write().unwrap(); // XXX unwrap
+    fn end_gc(&self) -> Result<()> {
+        let mut inner = self.0.write()?;
         inner.garbage_generation += 1;
         let garbage_generation = inner.garbage_generation;
 
@@ -78,6 +80,22 @@ impl CAS for Storage {
             }
         }
         inner.map = new_map;
+        Ok(())
+    }
+}
+
+// error-chain does not support generic errors in foreign_links, so these
+// implementations will reflect a PoisonError into a cas::Error.
+
+impl<'a> From<PoisonError<RwLockReadGuard<'a, Inner>>> for Error {
+    fn from(e: PoisonError<RwLockReadGuard<'a, Inner>>) -> Self {
+        ErrorKind::LockError(format!("{}", e)).into()
+    }
+}
+
+impl<'a> From<PoisonError<RwLockWriteGuard<'a, Inner>>> for Error {
+    fn from(e: PoisonError<RwLockWriteGuard<'a, Inner>>) -> Self {
+        ErrorKind::LockError(format!("{}", e)).into()
     }
 }
 
@@ -97,10 +115,14 @@ mod tests {
         let hash2 = storage.store(&"two".to_string()).unwrap();
         let badhash = Hash::from_hex("000000");
 
-        assert_eq!(storage.retrieve::<String>(&hash1).unwrap(),
-                   "one".to_string());
-        assert_eq!(storage.retrieve::<String>(&hash2).unwrap(),
-                   "two".to_string());
+        assert_eq!(
+            storage.retrieve::<String>(&hash1).unwrap(),
+            "one".to_string()
+        );
+        assert_eq!(
+            storage.retrieve::<String>(&hash2).unwrap(),
+            "two".to_string()
+        );
         assert!(storage.retrieve::<String>(&badhash).is_err());
     }
 
@@ -164,11 +186,11 @@ mod tests {
         let hash3 = storage.store(&"ghi".to_string()).unwrap();
         let hash4 = storage.store(&"jkl".to_string()).unwrap();
 
-        storage.begin_gc();
+        storage.begin_gc().unwrap();
         storage.touch(&hash1).unwrap();
         storage.retrieve::<String>(&hash2).unwrap();
         storage.store(&"ghi".to_string()).unwrap(); // hash3
-        storage.end_gc();
+        storage.end_gc().unwrap();
 
         // hash4 should be gone now
         assert!(storage.retrieve::<String>(&hash1).is_ok()); // touched

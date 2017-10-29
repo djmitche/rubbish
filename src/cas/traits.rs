@@ -44,9 +44,9 @@ pub trait CAS {
 
     /// Begin a garbage collection round.  Before dropping the resulting `GarbageCollection`
     /// instance, `touch` or `store` all non-garbage objects.
-    fn begin_gc(&self);
+    fn begin_gc(&self) -> Result<()>;
 
     /// Complete a garbage collection round.  This should be called exactly once per call
     /// to `begin_gc`.  Use `GarbageCollectionRound` to ensure this. (TODO)
-    fn end_gc(&self);
+    fn end_gc(&self) -> Result<()>;
 }
