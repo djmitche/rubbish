@@ -31,45 +31,9 @@ The entire application is, of course, a work in progress.
 
 * [TiKV](https://github.com/pingcap/tikv)
 
-## TODO
-
-### Single-Hosted
-
-Finish this application in a non-networked state
-
-* Implement tip API
-* Implement generational garbage collection between cas and fs
-    * add a GarbageCollectionRun struct that calls begin/end in RAII fashion
-
-### Distribute
-
-* Build a network interface
-* Teach cas to gossip
-* Teach prax to reach consensus
-* Build a server binary
-
-### Practicality
-
-* Teach cas to journal to disk (use GC generations to control file size)
-* Logging
-* Write a simple command-line client
-* Access control
-
-### Rename Things
-
-???
+## Names for Things
 
 * pile
 * heap
 * dumpster
 * truck
-
-### Misc
-
-* Travis
-* Enforce rustfmt
-* Run coverage
-* Rustish docs
-* fix unwrap's in CAS (need to cast Poison to cas::Error)
-* use pub(..) to set finer visibility
-* use serde, or better yet some write-based thing so we don't depend on repeatability of hash ordering
