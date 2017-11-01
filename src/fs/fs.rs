@@ -13,8 +13,7 @@ pub struct FileSystem<'a, ST: 'a + CAS> {
 }
 
 impl<'a, ST> FileSystem<'a, ST>
-where
-    ST: 'a + CAS,
+    where ST: 'a + CAS
 {
     pub fn new(storage: &'a ST) -> FileSystem<'a, ST> {
         FileSystem { storage: storage }
@@ -81,9 +80,7 @@ mod test {
 
         // check the parent hash
         let kid_hash = "7d134816ae341dd4cac908b4626f017412ea7d11536ad2db9ac014ff9772b129";
-        assert_eq!(
-            cmt.parents().unwrap()[0].hash().unwrap(),
-            &Hash::from_hex(kid_hash)
-        );
+        assert_eq!(cmt.parents().unwrap()[0].hash().unwrap(),
+                   &Hash::from_hex(kid_hash));
     }
 }

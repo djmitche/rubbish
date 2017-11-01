@@ -22,19 +22,21 @@ impl Storage {
     /// Create a new, empty storage pool.
     pub fn new() -> Storage {
         Storage(RwLock::new(Inner {
-            map: HashMap::new(),
-            garbage_generation: 0,
-            cur_generation: 1,
-        }))
+                                map: HashMap::new(),
+                                garbage_generation: 0,
+                                cur_generation: 1,
+                            }))
     }
 }
 
 impl CAS for Storage {
     fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash> {
         let mut inner = self.0.write()?;
+
         let cur_generation = inner.cur_generation;
         let content = Content::new(value)?;
         let hash = content.hash();
+        debug!("store content with hash {:?}", hash);
         inner.map.insert(hash.clone(), (cur_generation, content));
         // note that we assume no hash collisions of encoded values, since this is
         // not a security-sensitive context
@@ -43,6 +45,8 @@ impl CAS for Storage {
 
     fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T> {
         let inner = self.0.read()?;
+
+        debug!("retrieve content with hash {:?}", hash);
         match inner.map.get(hash) {
             None => bail!("No object found"),
             Some(tup) => Ok(tup.1.decode()?),
@@ -51,6 +55,8 @@ impl CAS for Storage {
 
     fn touch(&self, hash: &Hash) -> Result<()> {
         let mut inner = self.0.write()?;
+
+        debug!("touch content with hash {:?}", hash);
         let cur_generation = inner.cur_generation;
         match inner.map.remove(hash) {
             None => bail!("No object found"),
@@ -64,12 +70,14 @@ impl CAS for Storage {
     fn begin_gc(&self) -> Result<()> {
         let mut inner = self.0.write()?;
         inner.cur_generation += 1;
+        debug!("begin_gc: cur_generation={}", inner.cur_generation);
         Ok(())
     }
 
     fn end_gc(&self) -> Result<()> {
         let mut inner = self.0.write()?;
         inner.garbage_generation += 1;
+        debug!("endn_gc: garbage_generation={}", inner.garbage_generation);
         let garbage_generation = inner.garbage_generation;
 
         // generate a new map containing only non-garbage
@@ -106,23 +114,21 @@ mod tests {
     use cas::traits::CAS;
     use std::thread;
     use std::sync::Arc;
+    use env_logger;
 
     #[test]
     fn put_get_strings() {
         let storage = Storage::new();
+        env_logger::init().unwrap();
 
         let hash1 = storage.store(&"one".to_string()).unwrap();
         let hash2 = storage.store(&"two".to_string()).unwrap();
         let badhash = Hash::from_hex("000000");
 
-        assert_eq!(
-            storage.retrieve::<String>(&hash1).unwrap(),
-            "one".to_string()
-        );
-        assert_eq!(
-            storage.retrieve::<String>(&hash2).unwrap(),
-            "two".to_string()
-        );
+        assert_eq!(storage.retrieve::<String>(&hash1).unwrap(),
+                   "one".to_string());
+        assert_eq!(storage.retrieve::<String>(&hash2).unwrap(),
+                   "two".to_string());
         assert!(storage.retrieve::<String>(&badhash).is_err());
     }
 
