@@ -55,7 +55,8 @@ pub struct Prax<S> {
 }
 
 impl<S> Prax<S>
-    where S: DistributedState + Clone
+where
+    S: DistributedState + Clone,
 {
     /// Create a new Prax instance, beginning with the given state
     pub fn new(state: S) -> Prax<S> {

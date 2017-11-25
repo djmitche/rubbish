@@ -34,7 +34,8 @@ pub struct Tip<'a, C: 'a + CAS> {
 }
 
 impl<'a, C> Tip<'a, C>
-    where C: 'a + CAS
+where
+    C: 'a + CAS,
 {
     pub fn new(storage: &'a C) -> Result<Tip<'a, C>> {
         let fs = FileSystem::new(storage);
@@ -43,10 +44,10 @@ impl<'a, C> Tip<'a, C>
         let prax = Prax::new(root_hash);
 
         Ok(Tip {
-               storage: storage,
-               fs: fs,
-               prax: prax,
-           })
+            storage: storage,
+            fs: fs,
+            prax: prax,
+        })
     }
 
     /// Read a value from the cluster, returning the current value as of the beginning of this

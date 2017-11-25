@@ -34,7 +34,8 @@ struct RawCommit {
 }
 
 impl<'f, ST> Commit<'f, ST>
-    where ST: 'f + CAS
+where
+    ST: 'f + CAS,
 {
     /// Return a refcounted root commit
     pub fn root(fs: &'f FileSystem<'f, ST>) -> Commit<'f, ST> {
@@ -64,9 +65,9 @@ impl<'f, ST> Commit<'f, ST>
             tree: tree,
         };
         Ok(Commit {
-               fs: fs,
-               inner: Rc::new(LazyHashedObject::for_content(content)),
-           })
+            fs: fs,
+            inner: Rc::new(LazyHashedObject::for_content(content)),
+        })
     }
 
     /// Get the hash for this commit
@@ -97,7 +98,8 @@ impl<'f, ST: 'f + CAS> Clone for Commit<'f, ST> {
 }
 
 impl<'f, ST> LazyContent<'f, ST> for CommitContent<'f, ST>
-    where ST: 'f + CAS
+where
+    ST: 'f + CAS,
 {
     fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<CommitContent<'f, ST>> {
         let raw: RawCommit = fs.storage.retrieve(hash)?;
@@ -108,9 +110,9 @@ impl<'f, ST> LazyContent<'f, ST> for CommitContent<'f, ST>
         }
 
         Ok(CommitContent {
-               parents: parents,
-               tree: Tree::for_hash(fs, &raw.tree),
-           })
+            parents: parents,
+            tree: Tree::for_hash(fs, &raw.tree),
+        })
     }
 
     fn store_in(&self, fs: &FileSystem<'f, ST>) -> Result<Hash> {
@@ -150,8 +152,10 @@ mod test {
         // reload the root hash from storage
         let root = Commit::for_hash(&fs, &Hash::from_hex(ROOT_HASH));
         assert_eq!(root.parents().unwrap().len(), 0);
-        assert_eq!(root.tree().unwrap().hash().unwrap(),
-                   &Hash::from_hex(EMPTY_TREE_HASH));
+        assert_eq!(
+            root.tree().unwrap().hash().unwrap(),
+            &Hash::from_hex(EMPTY_TREE_HASH)
+        );
     }
 
     #[test]

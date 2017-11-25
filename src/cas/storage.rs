@@ -22,10 +22,10 @@ impl Storage {
     /// Create a new, empty storage pool.
     pub fn new() -> Storage {
         Storage(RwLock::new(Inner {
-                                map: HashMap::new(),
-                                garbage_generation: 0,
-                                cur_generation: 1,
-                            }))
+            map: HashMap::new(),
+            garbage_generation: 0,
+            cur_generation: 1,
+        }))
     }
 }
 
@@ -129,10 +129,14 @@ mod tests {
         let hash2 = storage.store(&"two".to_string()).unwrap();
         let badhash = Hash::from_hex("000000");
 
-        assert_eq!(storage.retrieve::<String>(&hash1).unwrap(),
-                   "one".to_string());
-        assert_eq!(storage.retrieve::<String>(&hash2).unwrap(),
-                   "two".to_string());
+        assert_eq!(
+            storage.retrieve::<String>(&hash1).unwrap(),
+            "one".to_string()
+        );
+        assert_eq!(
+            storage.retrieve::<String>(&hash2).unwrap(),
+            "two".to_string()
+        );
         assert!(storage.retrieve::<String>(&badhash).is_err());
     }
 

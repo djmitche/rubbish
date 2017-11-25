@@ -5,8 +5,8 @@ error_chain! {
             description("lock error")
             display("lock error: '{}'", msg)
         }
-    }   
+    }
 
     foreign_links {
-    }   
+    }
 }

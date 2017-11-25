@@ -12,9 +12,7 @@ use std::marker::PhantomData;
 /// only when requested; or it can be created with content, in which case the hash is only
 /// determined when requested (with the object stored in the FileSystem at that time).
 #[derive(Debug)]
-pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(RefCell<LazyInner<'f,
-                                                                                         ST,
-                                                                                         T>>);
+pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(RefCell<LazyInner<'f, ST, T>>);
 
 /// LazyInner proivdes interior mutability for LazyHashedObject.
 ///
@@ -22,7 +20,8 @@ pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(RefCell<La
 /// INVARIANT β: a `Some(_)` value for `hash` or `content` is immutable.
 #[derive(Debug)]
 struct LazyInner<'f, ST: 'f + CAS, T>
-    where T: LazyContent<'f, ST>
+where
+    T: LazyContent<'f, ST>,
 {
     /// The hash of this object, if it has already been calculated
     hash: Option<Hash>,
@@ -46,7 +45,8 @@ pub trait LazyContent<'f, ST: 'f + CAS>: Sized {
 }
 
 impl<'f, ST: 'f + CAS, T> LazyHashedObject<'f, ST, T>
-    where T: LazyContent<'f, ST>
+where
+    T: LazyContent<'f, ST>,
 {
     /// Create a new LazyHashedObject containing the given content.  This is a lazy operation, so
     /// no storage occurs until the object's hash is requested.
@@ -65,9 +65,9 @@ impl<'f, ST: 'f + CAS, T> LazyHashedObject<'f, ST, T>
         let mut borrow = self.0.borrow_mut();
         let h = borrow.hash(fs)?;
         Ok(unsafe {
-               // "upgrade" h's lifetime from that of the mutable borrow, based on invariant β
-               (h as *const Hash).as_ref().unwrap()
-           })
+            // "upgrade" h's lifetime from that of the mutable borrow, based on invariant β
+            (h as *const Hash).as_ref().unwrap()
+        })
     }
 
     /// Get the content of this object, retrieving it from the FileSystem first if necessary.
@@ -75,9 +75,9 @@ impl<'f, ST: 'f + CAS, T> LazyHashedObject<'f, ST, T>
         let mut borrow = self.0.borrow_mut();
         let c = borrow.content(fs)?;
         Ok(unsafe {
-               // "upgrade" c's lifetime from that of the mutable borrow, based on invariant β
-               (c as *const T).as_ref().unwrap()
-           })
+            // "upgrade" c's lifetime from that of the mutable borrow, based on invariant β
+            (c as *const T).as_ref().unwrap()
+        })
     }
 
     /// Does this lazy object already have a hash?
@@ -93,7 +93,8 @@ impl<'f, ST: 'f + CAS, T> LazyHashedObject<'f, ST, T>
 }
 
 impl<'f, ST: 'f + CAS, T> LazyInner<'f, ST, T>
-    where T: LazyContent<'f, ST>
+where
+    T: LazyContent<'f, ST>,
 {
     // Return a reference to PhantomData with the appropriate lifetime.  PhantomData is a zero-byte
     // data structure, so lifetime isn't a relevant concept and upgrading its lifetime is a
@@ -146,9 +147,9 @@ impl<'f, ST: 'f + CAS, T> LazyInner<'f, ST, T>
             None => unreachable!(),
             Some(ref h) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of h to that of self based on invariant β
-                       (h as *const Hash).as_ref().unwrap()
-                   })
+                    // "upgrade" the lifetime of h to that of self based on invariant β
+                    (h as *const Hash).as_ref().unwrap()
+                })
             }
         }
     }
@@ -176,9 +177,9 @@ impl<'f, ST: 'f + CAS, T> LazyInner<'f, ST, T>
             None => unreachable!(),
             Some(ref c) => {
                 Ok(unsafe {
-                       // "upgrade" the lifetime of h to that of self based on invariant β
-                       (c as *const T).as_ref().unwrap()
-                   })
+                    // "upgrade" the lifetime of h to that of self based on invariant β
+                    (c as *const T).as_ref().unwrap()
+                })
             }
         }
     }
@@ -195,7 +196,8 @@ mod test {
     struct TestContent(String);
 
     impl<'f, ST> LazyContent<'f, ST> for TestContent
-        where ST: 'f + CAS
+    where
+        ST: 'f + CAS,
     {
         fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self> {
             let val: TestContent = fs.storage.retrieve(hash)?;
