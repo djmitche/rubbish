@@ -64,6 +64,7 @@ mod content;
 mod storage;
 mod traits;
 mod gc;
+mod local;
 
 pub use self::hash::Hash;
 pub use self::storage::Storage;
@@ -75,4 +76,4 @@ pub use self::error::*;
 
 // LocalStorage is for test use only
 #[cfg(test)]
-pub use self::storage::Storage as LocalStorage;
+pub use self::local::LocalStorage;

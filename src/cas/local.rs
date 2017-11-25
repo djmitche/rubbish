@@ -7,10 +7,10 @@ use std::sync::{RwLock, PoisonError, RwLockReadGuard, RwLockWriteGuard};
 use rustc_serialize::{Decodable, Encodable};
 use std::convert::From;
 
-/// Type Storage provides a distributed content-addressible storage pool.  The content
-/// inserted into the mechanism can be of any type implementing the `rustc_serialize`
-/// traits `Decodable` and `Encodable`.
-pub struct Storage(RwLock<Inner>);
+/// Type LocalStorage provides a non-distributed content-addressible storage pool, suitable for
+/// local testing.  The content inserted into the mechanism can be of any type implementing the
+/// `rustc_serialize` traits `Decodable` and `Encodable`.
+pub struct LocalStorage(RwLock<Inner>);
 
 pub(crate) struct Inner {
     map: HashMap<Hash, (u64, Content)>,
@@ -18,10 +18,10 @@ pub(crate) struct Inner {
     cur_generation: u64,
 }
 
-impl Storage {
+impl LocalStorage {
     /// Create a new, empty storage pool.
-    pub fn new() -> Storage {
-        Storage(RwLock::new(Inner {
+    pub fn new() -> LocalStorage {
+        LocalStorage(RwLock::new(Inner {
             map: HashMap::new(),
             garbage_generation: 0,
             cur_generation: 1,
@@ -29,7 +29,7 @@ impl Storage {
     }
 }
 
-impl CAS for Storage {
+impl CAS for LocalStorage {
     fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash> {
         let mut inner = self.0.write()?;
 
@@ -113,7 +113,7 @@ impl<'a> From<PoisonError<RwLockWriteGuard<'a, Inner>>> for Error {
 
 #[cfg(test)]
 mod tests {
-    use super::Storage;
+    use super::LocalStorage;
     use cas::hash::Hash;
     use cas::traits::CAS;
     use std::thread;
@@ -122,9 +122,8 @@ mod tests {
 
     #[test]
     fn put_get_strings() {
+        let storage = LocalStorage::new();
         init_env_logger();
-
-        let storage = Storage::new();
 
         let hash1 = storage.store(&"one".to_string()).unwrap();
         let hash2 = storage.store(&"two".to_string()).unwrap();
@@ -143,9 +142,9 @@ mod tests {
 
     #[test]
     fn test_parallel_access() {
-        let storage = Arc::new(Storage::new());
+        let storage = Arc::new(LocalStorage::new());
 
-        fn thd(storage: Arc<Storage>) {
+        fn thd(storage: Arc<LocalStorage>) {
             let mut hashes = vec![];
             for i in 0..100 {
                 hashes.push(storage.store::<usize>(&i).unwrap());
@@ -170,7 +169,7 @@ mod tests {
 
     #[test]
     fn put_twice() {
-        let storage = super::Storage::new();
+        let storage = super::LocalStorage::new();
 
         let hash1 = storage.store(&"xyz".to_string()).unwrap();
         let hash2 = storage.store(&"xyz".to_string()).unwrap();
@@ -179,7 +178,7 @@ mod tests {
 
     #[test]
     fn touch() {
-        let storage = super::Storage::new();
+        let storage = super::LocalStorage::new();
 
         let hash1 = storage.store(&"xyz".to_string()).unwrap();
         storage.touch(&hash1).unwrap();
@@ -187,14 +186,14 @@ mod tests {
 
     #[test]
     fn touch_fails() {
-        let storage = super::Storage::new();
+        let storage = super::LocalStorage::new();
 
         assert!(storage.touch(&Hash::from_hex("1234")).is_err());
     }
 
     #[test]
     fn gc() {
-        let storage = super::Storage::new();
+        let storage = super::LocalStorage::new();
 
         let hash1 = storage.store(&"abc".to_string()).unwrap();
         let hash2 = storage.store(&"def".to_string()).unwrap();
