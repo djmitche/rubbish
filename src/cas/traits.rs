@@ -47,6 +47,6 @@ pub trait CAS {
     fn begin_gc(&self) -> Result<()>;
 
     /// Complete a garbage collection round.  This should be called exactly once per call
-    /// to `begin_gc`.  Use `GarbageCollectionRound` to ensure this. (TODO)
-    fn end_gc(&self) -> Result<()>;
+    /// to `begin_gc`.  Use `GarbageCycle` to ensure this.
+    fn end_gc(&self);
 }

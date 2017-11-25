@@ -74,21 +74,25 @@ impl CAS for Storage {
         Ok(())
     }
 
-    fn end_gc(&self) -> Result<()> {
-        let mut inner = self.0.write()?;
-        inner.garbage_generation += 1;
-        debug!("endn_gc: garbage_generation={}", inner.garbage_generation);
-        let garbage_generation = inner.garbage_generation;
+    fn end_gc(&self) {
+        if let Ok(mut inner) = self.0.write() {
+            inner.garbage_generation += 1;
+            debug!("endn_gc: garbage_generation={}", inner.garbage_generation);
+            let garbage_generation = inner.garbage_generation;
 
-        // generate a new map containing only non-garbage
-        let mut new_map = HashMap::new();
-        for (k, v) in inner.map.drain() {
-            if v.0 > garbage_generation {
-                new_map.insert(k, v);
+            // generate a new map containing only non-garbage
+            let mut new_map = HashMap::new();
+            for (k, v) in inner.map.drain() {
+                if v.0 > garbage_generation {
+                    new_map.insert(k, v);
+                }
             }
+            inner.map = new_map;
+        } else {
+            // locking fails only with a PoisonError, which is basically fatal,
+            // but we cannot return an error right now.  So, leave the GC cycle
+            // running and let the next attempt to lock produce the same error.
         }
-        inner.map = new_map;
-        Ok(())
     }
 }
 
@@ -196,7 +200,7 @@ mod tests {
         storage.touch(&hash1).unwrap();
         storage.retrieve::<String>(&hash2).unwrap();
         storage.store(&"ghi".to_string()).unwrap(); // hash3
-        storage.end_gc().unwrap();
+        storage.end_gc();
 
         // hash4 should be gone now
         assert!(storage.retrieve::<String>(&hash1).is_ok()); // touched
