@@ -401,7 +401,6 @@ mod test {
             .unwrap();
         let tree = Tree::for_hash(&fs, tree.hash().unwrap());
         let tree = tree.remove(&["a", "b", "c", "d"]).unwrap();
-        println!("{:?}", tree);
 
         // should trim empty directories, so this should be empty
         assert_eq!(tree.hash().unwrap(), &Hash::from_hex(EMPTY_HASH));
