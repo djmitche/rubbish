@@ -1,11 +1,91 @@
-//! The `net` module implements network support for all levels of the Rubbish application.
-//!
-//! It implements a datagram-like model, layered over IPv6-only UDP.
-//!
-//! This is a thin layer over the `mio` crate.
+//! The `rubbish::net` module implements network support for all levels of the Rubbish application.
 
 mod error;
+mod transport;
 
+use tokio_core::reactor::Handle;
+use tokio_core::net::{TcpListener, TcpStream};
+use tokio_io::AsyncRead;
+use futures::{future, Future, Stream, Sink};
+use std::net::SocketAddr;
+
+use net::error::*;
+
+pub struct Node {
+    address: SocketAddr,
+    handle: Handle,
+}
+
+type EmptyFuture = Box<Future<Item = (), Error = Error>>;
+type TransportSink = Sink<SinkItem = String, SinkError = Error>;
+type TransportStream = Stream<Item = String, Error = Error>;
+
+impl Node {
+    /// Create a new node
+    pub fn new(address: SocketAddr, handle: Handle) -> Node {
+        Node { address, handle }
+    }
+
+    /// Begin running this node
+    pub fn run(self) -> EmptyFuture {
+        let listen_fut = self.listen_for_connections();
+        listen_fut
+    }
+
+    fn listen_for_connections(&self) -> EmptyFuture {
+        let handle = self.handle.clone();
+
+        let listener = match TcpListener::bind(&self.address, &self.handle) {
+            Ok(listener) => listener,
+            Err(e) => {
+                return Box::new(future::err(e.into()));
+            }
+        };
+
+        // for each connection, create a new neighbor
+        let connections = listener.incoming();
+        Box::new(
+            connections
+                .for_each(move |(socket, peer)| {
+                    let neighbor = Neighbor::new(peer);
+                    handle.spawn(neighbor.run(socket));
+
+                    future::ok(())
+                })
+                .map_err(|e| e.into()),
+        )
+    }
+}
+
+pub struct Neighbor {
+    peer: SocketAddr,
+}
+
+impl Neighbor {
+    fn new(peer: SocketAddr) -> Neighbor {
+
+        debug!("new neighbor {}", peer);
+        let neighbor = Neighbor { peer };
+
+        neighbor
+    }
+
+    fn run(&self, socket: TcpStream) -> Box<Future<Item = (), Error = ()>> {
+        let (writer, reader) = socket.framed(transport::new()).split();
+        let peer = self.peer;
+
+        Box::new(
+            writer
+                .send_all(reader.and_then(move |req| future::ok(req)))
+                .then(move |_| {
+                    debug!("connection to neighbor {} closed", peer);
+                    Ok(())
+                }),
+        )
+    }
+}
+
+/*
 use net::error::*;
 use mio::{Events, Poll, Token, Ready, PollOpt};
 use mio::net::UdpSocket;
@@ -152,30 +232,20 @@ impl<T: Fn(&Node)> TimeoutHandler for T {
         self(node)
     }
 }
+*/
 
 #[cfg(test)]
 mod test {
     use super::Node;
     use util::test::init_env_logger;
-    use std::time::Duration;
+    use tokio_core::reactor::Core;
 
     #[test]
-    fn test_stop() {
+    fn test_echo() {
         init_env_logger();
-        let mut node = Node::new().unwrap();
 
-        node.stop().unwrap();
-        node.serve().unwrap();
-    }
-
-    #[test]
-    fn test_timeout() {
-        init_env_logger();
-        let mut node = Node::new().unwrap();
-
-        node.set_timeout(Duration::from_millis(1), {
-            |node: &Node| node.stop().unwrap()
-        }).unwrap();
-        node.serve().unwrap();
+        let mut core = Core::new().unwrap();
+        let node = Node::new("0.0.0.0:12345".parse().unwrap(), core.handle());
+        core.run(node.run()).unwrap();
     }
 }

@@ -9,8 +9,11 @@ extern crate error_chain;
 #[macro_use]
 extern crate log;
 extern crate env_logger;
-extern crate mio;
-extern crate mio_more;
+extern crate bytes;
+extern crate futures;
+extern crate tokio_io;
+extern crate tokio_core;
+
 
 pub mod cas;
 pub mod fs;
