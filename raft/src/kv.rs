@@ -26,64 +26,89 @@ struct Request {
 /// Response to a Request
 #[derive(Serialize, Deserialize, Debug)]
 struct Response {
-    // TODO: a "present" property?
     #[serde(default)]
     value: Option<String>,
 }
 
 type KV = Arc<Mutex<HashMap<String, String>>>;
 
-/// A KV server listens for TCP connections and services them.
-pub struct Server {
-    kv: KV,
+/// A KV backend is responsible for storing keys and values.  It is cloned into
+/// multiple threads.
+pub trait Backend: Sync + Send + Clone {
+    fn get(&self, key: &str) -> Option<String>;
+    fn set(&self, key: String, value: String);
+    fn delete(&self, key: &str);
 }
 
-impl Server {
-    /// Create a new server
-    pub fn new() -> Server {
-        Server {
-            kv: Arc::new(Mutex::new(HashMap::new())),
+/// Local is a KV Backend that just stores data in a hashmap.
+#[derive(Debug, Clone)]
+pub struct Local(KV);
+
+impl Local {
+    /// Create a new local backend.
+    pub fn new() -> Local {
+        Local(Arc::new(Mutex::new(HashMap::new())))
+    }
+}
+
+impl Backend for Local {
+    fn get(&self, key: &str) -> Option<String> {
+        match self.0.lock().unwrap().get(key) {
+            Some(s) => Some(s.clone()),
+            None => None,
         }
+    }
+    fn set(&self, key: String, value: String) {
+        self.0.lock().unwrap().insert(key, value);
+    }
+    fn delete(&self, key: &str) {
+        self.0.lock().unwrap().remove(key);
+    }
+}
+
+/// A KV server listens for TCP connections and services them.
+pub struct Server<B: Backend> {
+    backend: B,
+}
+
+impl<B: Backend + 'static> Server<B> {
+    /// Create a new server
+    pub fn new(backend: B) -> Server<B> {
+        Server { backend }
     }
 
     /// Serve forever on this listening TCP socket (the result of TcpListener::bind)
-    pub fn serve(self: Server, bound_sock: TcpListener) -> ! {
+    pub fn serve(self: Server<B>, bound_sock: TcpListener) -> ! {
         loop {
             let (mut sock, addr) = bound_sock.accept().unwrap();
             println!("connection from {:?}", addr);
-            let kv = self.kv.clone();
-            thread::spawn(move || Server::serve_client(kv, &mut sock));
-        }
-    }
+            let backend = self.backend.clone();
+            thread::spawn(move || loop {
+                let msg = recv_message(&mut sock).unwrap();
+                let v: Request = serde_json::from_slice(&msg[..]).unwrap();
+                println!("{:?}", v);
 
-    fn serve_client(kv: KV, sock: &mut TcpStream) -> Fallible<()> {
-        loop {
-            let msg = recv_message(sock).unwrap();
-            let v: Request = serde_json::from_slice(&msg[..]).unwrap();
-            println!("{:?}", v);
-
-            match &v.op[..] {
-                "set" => {
-                    kv.lock().unwrap().insert(v.key, v.value);
-                    println!("insert {:?}", kv.lock().unwrap());
-                    send_message(sock, b"{}").unwrap();
-                }
-                "get" => {
-                    let locked = kv.lock().unwrap();
-                    if let Some(s) = locked.get(&v.key) {
-                        let msg = serde_json::to_vec(&json!({ "value": s })).unwrap();
-                        send_message(sock, &msg[..]).unwrap();
-                    } else {
-                        let msg = serde_json::to_vec(&json!({})).unwrap();
-                        send_message(sock, &msg[..]).unwrap();
+                match &v.op[..] {
+                    "set" => {
+                        backend.set(v.key, v.value);
+                        send_message(&mut sock, b"{}").unwrap();
                     }
+                    "get" => {
+                        if let Some(s) = backend.get(&v.key) {
+                            let msg = serde_json::to_vec(&json!({ "value": s })).unwrap();
+                            send_message(&mut sock, &msg[..]).unwrap();
+                        } else {
+                            let msg = serde_json::to_vec(&json!({})).unwrap();
+                            send_message(&mut sock, &msg[..]).unwrap();
+                        }
+                    }
+                    "delete" => {
+                        backend.delete(&v.key);
+                        send_message(&mut sock, b"{}").unwrap();
+                    }
+                    _ => panic!("unknown op {:?}", v.op),
                 }
-                "delete" => {
-                    kv.lock().unwrap().remove(&v.key);
-                    send_message(sock, b"{}").unwrap();
-                }
-                _ => panic!("unknown op {:?}", v.op),
-            }
+            });
         }
     }
 }

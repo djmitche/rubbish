@@ -1,5 +1,5 @@
 use failure::Fallible;
-use raft::kv::Server;
+use raft::kv::{Local, Server};
 use std::env;
 use std::net::TcpListener;
 
@@ -9,5 +9,5 @@ fn main() -> Fallible<()> {
     let port = args[1].parse::<u16>()?;
 
     let sock = TcpListener::bind(format!("127.0.0.1:{}", port))?;
-    Server::new().serve(sock);
+    Server::new(Local::new()).serve(sock);
 }
