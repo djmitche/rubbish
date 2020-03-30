@@ -78,37 +78,47 @@ impl<B: Backend + 'static> Server<B> {
     }
 
     /// Serve forever on this listening TCP socket (the result of TcpListener::bind)
-    pub fn serve(self: Server<B>, bound_sock: TcpListener) -> ! {
+    pub fn serve(self, bound_sock: TcpListener) -> ! {
         loop {
-            let (mut sock, addr) = bound_sock.accept().unwrap();
-            println!("connection from {:?}", addr);
+            let (mut sock, _) = bound_sock.accept().unwrap();
             let backend = self.backend.clone();
-            thread::spawn(move || loop {
-                let msg = recv_message(&mut sock).unwrap();
-                let v: Request = serde_json::from_slice(&msg[..]).unwrap();
-                println!("{:?}", v);
+            thread::spawn(move || Server::serve_n(backend, &mut sock, 0));
+        }
+    }
 
-                match &v.op[..] {
-                    "set" => {
-                        backend.set(v.key, v.value);
-                        send_message(&mut sock, b"{}").unwrap();
-                    }
-                    "get" => {
-                        if let Some(s) = backend.get(&v.key) {
-                            let msg = serde_json::to_vec(&json!({ "value": s })).unwrap();
-                            send_message(&mut sock, &msg[..]).unwrap();
-                        } else {
-                            let msg = serde_json::to_vec(&json!({})).unwrap();
-                            send_message(&mut sock, &msg[..]).unwrap();
-                        }
-                    }
-                    "delete" => {
-                        backend.delete(&v.key);
-                        send_message(&mut sock, b"{}").unwrap();
-                    }
-                    _ => panic!("unknown op {:?}", v.op),
+    // serve a socket, handling N requests (or infinite if 0)
+    fn serve_n(backend: B, sock: &mut TcpStream, mut n: u16) {
+        loop {
+            let msg = recv_message(sock).unwrap();
+            let v: Request = serde_json::from_slice(&msg[..]).unwrap();
+
+            match &v.op[..] {
+                "set" => {
+                    backend.set(v.key, v.value);
+                    send_message(sock, b"{}").unwrap();
                 }
-            });
+                "get" => {
+                    if let Some(s) = backend.get(&v.key) {
+                        let msg = serde_json::to_vec(&json!({ "value": s })).unwrap();
+                        send_message(sock, &msg[..]).unwrap();
+                    } else {
+                        let msg = serde_json::to_vec(&json!({})).unwrap();
+                        send_message(sock, &msg[..]).unwrap();
+                    }
+                }
+                "delete" => {
+                    backend.delete(&v.key);
+                    send_message(sock, b"{}").unwrap();
+                }
+                _ => panic!("unknown op {:?}", v.op),
+            }
+
+            if n != 0 {
+                n = n - 1;
+                if n == 0 {
+                    break;
+                }
+            }
         }
     }
 }
@@ -167,5 +177,29 @@ impl Client {
             return Ok(Some(value));
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::util::test::threaded_test;
+
+    #[test]
+    fn test_with_local() {
+        threaded_test(
+            |mut sock| {
+                let backend = Local::new();
+                Server::serve_n(backend.clone(), &mut sock, 5);
+            },
+            |sock| {
+                let mut client = Client::new(sock);
+                assert_eq!(client.get("kk").unwrap(), None);
+                client.set("kk", "vv").unwrap();
+                assert_eq!(client.get("kk").unwrap(), Some(String::from("vv")));
+                client.delete("kk").unwrap();
+                assert_eq!(client.get("kk").unwrap(), None);
+            },
+        );
     }
 }

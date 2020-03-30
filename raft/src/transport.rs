@@ -36,42 +36,23 @@ pub fn recv_message(sock: &mut TcpStream) -> Fallible<Vec<u8>> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::net::TcpListener;
+    use crate::util::test::threaded_test;
     use std::thread;
     use std::time::Duration;
-
-    fn threaded_test(server_fn: fn(&mut TcpStream) -> (), client_fn: fn(&mut TcpStream) -> ()) {
-        // establish a server..
-        let server = TcpListener::bind("127.0.0.1:0").unwrap();
-        let serveraddr = server.local_addr().unwrap();
-
-        let server_thread = thread::spawn(move || {
-            let (mut sock, _) = server.accept().unwrap();
-            server_fn(&mut sock);
-        });
-
-        let client_thread = thread::spawn(move || {
-            let mut sock = TcpStream::connect(serveraddr).unwrap();
-            client_fn(&mut sock);
-        });
-
-        server_thread.join().unwrap();
-        client_thread.join().unwrap();
-    }
 
     #[test]
     fn test_send_message() {
         threaded_test(
-            |sock| {
-                send_message(sock, b"Hello").unwrap();
+            |mut sock| {
+                send_message(&mut sock, b"Hello").unwrap();
             },
-            |sock| {
+            |mut sock| {
                 let mut lenbuf = [0; 4];
-                readall(sock, &mut lenbuf).unwrap();
+                readall(&mut sock, &mut lenbuf).unwrap();
                 assert_eq!(lenbuf, [0u8, 0, 0, 5]);
 
                 let mut buf = [0; 5];
-                readall(sock, &mut buf).unwrap();
+                readall(&mut sock, &mut buf).unwrap();
                 assert_eq!(&buf[..], b"Hello");
             },
         )
@@ -80,13 +61,13 @@ mod test {
     #[test]
     fn test_recv_message() {
         threaded_test(
-            |sock| {
+            |mut sock| {
                 // 4 bytes of length, 4 bytes of message
                 let buf = [0u8, 0, 0, 4, 100, 101, 102, 103];
-                writeall(sock, &buf).unwrap();
+                writeall(&mut sock, &buf).unwrap();
             },
-            |sock| {
-                let msg = recv_message(sock).unwrap();
+            |mut sock| {
+                let msg = recv_message(&mut sock).unwrap();
                 assert_eq!(&msg[..], &[100, 101, 102, 103]);
             },
         )
@@ -95,15 +76,15 @@ mod test {
     #[test]
     fn test_bidirectional() {
         threaded_test(
-            |sock| {
-                send_message(sock, b"Hello").unwrap();
-                let msg1 = recv_message(sock).unwrap();
+            |mut sock| {
+                send_message(&mut sock, b"Hello").unwrap();
+                let msg1 = recv_message(&mut sock).unwrap();
                 assert_eq!(&msg1[..], b"Welcome");
             },
-            |sock| {
-                let msg1 = recv_message(sock).unwrap();
+            |mut sock| {
+                let msg1 = recv_message(&mut sock).unwrap();
                 assert_eq!(&msg1[..], b"Hello");
-                send_message(sock, b"Welcome").unwrap();
+                send_message(&mut sock, b"Welcome").unwrap();
             },
         )
     }
@@ -111,19 +92,19 @@ mod test {
     #[test]
     fn test_multiple() {
         threaded_test(
-            |sock| {
-                send_message(sock, b"One").unwrap();
-                send_message(sock, b"Two").unwrap();
-                send_message(sock, b"Three").unwrap();
+            |mut sock| {
+                send_message(&mut sock, b"One").unwrap();
+                send_message(&mut sock, b"Two").unwrap();
+                send_message(&mut sock, b"Three").unwrap();
             },
-            |sock| {
+            |mut sock| {
                 // queue the sends up, so that we're confident we de-frame these
                 thread::sleep(Duration::from_millis(10));
-                let msg1 = recv_message(sock).unwrap();
+                let msg1 = recv_message(&mut sock).unwrap();
                 assert_eq!(&msg1[..], b"One");
-                let msg2 = recv_message(sock).unwrap();
+                let msg2 = recv_message(&mut sock).unwrap();
                 assert_eq!(&msg2[..], b"Two");
-                let msg3 = recv_message(sock).unwrap();
+                let msg3 = recv_message(&mut sock).unwrap();
                 assert_eq!(&msg3[..], b"Three");
             },
         )
