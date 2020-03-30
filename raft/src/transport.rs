@@ -4,11 +4,12 @@
 
 use crate::util::{readall, writeall};
 use byteorder::{ByteOrder, NetworkEndian};
+use std::convert::TryFrom;
 use std::net::TcpStream;
 
 pub fn send_message(sock: &mut TcpStream, msg: &[u8]) -> std::io::Result<()> {
     let mut lenbuf = [0u8; 4];
-    let len: u32 = msg.len() as u32; // NOTE: truncates!
+    let len: u32 = u32::try_from(msg.len()).unwrap();
 
     NetworkEndian::write_u32(&mut lenbuf, len);
     writeall(sock, &lenbuf)?;
