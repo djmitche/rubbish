@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use failure::Fallible;
 
 pub mod local;
-//pub mod tcp;
+pub mod tcp;
 
 pub type NodeId = usize;
 
