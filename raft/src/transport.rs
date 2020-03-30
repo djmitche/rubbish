@@ -7,6 +7,8 @@ use byteorder::{ByteOrder, NetworkEndian};
 use std::convert::TryFrom;
 use std::net::TcpStream;
 
+/// Send the given message over the given socket.  Note that this must not be called concurrently,
+/// as the message framining may in that case be mixed up.
 pub fn send_message(sock: &mut TcpStream, msg: &[u8]) -> std::io::Result<()> {
     let mut lenbuf = [0u8; 4];
     let len: u32 = u32::try_from(msg.len()).unwrap();
@@ -16,6 +18,7 @@ pub fn send_message(sock: &mut TcpStream, msg: &[u8]) -> std::io::Result<()> {
     writeall(sock, msg)
 }
 
+/// Receive a message from the given socket.
 pub fn recv_message(sock: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     let mut lenbuf = [0u8; 4];
     readall(sock, &mut lenbuf)?;
