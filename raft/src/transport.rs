@@ -31,6 +31,7 @@ mod test {
     use super::*;
     use std::net::TcpListener;
     use std::thread;
+    use std::time::Duration;
 
     fn threaded_test(server_fn: fn(&mut TcpStream) -> (), client_fn: fn(&mut TcpStream) -> ()) {
         // establish a server..
@@ -80,6 +81,43 @@ mod test {
             |sock| {
                 let msg = recv_message(sock).unwrap();
                 assert_eq!(&msg[..], &[100, 101, 102, 103]);
+            },
+        )
+    }
+
+    #[test]
+    fn test_bidirectional() {
+        threaded_test(
+            |sock| {
+                send_message(sock, b"Hello").unwrap();
+                let msg1 = recv_message(sock).unwrap();
+                assert_eq!(&msg1[..], b"Welcome");
+            },
+            |sock| {
+                let msg1 = recv_message(sock).unwrap();
+                assert_eq!(&msg1[..], b"Hello");
+                send_message(sock, b"Welcome").unwrap();
+            },
+        )
+    }
+
+    #[test]
+    fn test_multiple() {
+        threaded_test(
+            |sock| {
+                send_message(sock, b"One").unwrap();
+                send_message(sock, b"Two").unwrap();
+                send_message(sock, b"Three").unwrap();
+            },
+            |sock| {
+                // queue the sends up, so that we're confident we de-frame these
+                thread::sleep(Duration::from_millis(10));
+                let msg1 = recv_message(sock).unwrap();
+                assert_eq!(&msg1[..], b"One");
+                let msg2 = recv_message(sock).unwrap();
+                assert_eq!(&msg2[..], b"Two");
+                let msg3 = recv_message(sock).unwrap();
+                assert_eq!(&msg3[..], b"Three");
             },
         )
     }
