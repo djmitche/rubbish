@@ -33,11 +33,29 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     /// The network node, used for communication
     node: N,
 
-    /// The local raft log
-    log: RaftLog<char>,
-
     /// Channel indicating the task should stop
     control_rx: mpsc::Receiver<Control>,
+
+    /// "latest term the server has seen"
+    current_term: Term,
+
+    /// "candidateId that received vote in current term (or null if none)"
+    voted_for: Option<NodeId>,
+
+    /// The log entries
+    log: RaftLog<char>,
+
+    /// Index of the highest log entry known to be committed
+    commit_index: Index,
+
+    /// Index of the highest log entry applied to state machine
+    last_applied: Index,
+
+    /// "for each server, index of the next log entry to send to that server"
+    next_index: Vec<Index>,
+
+    /// "for each server, index of the highest log entry known to be replicated on server"
+    match_index: Vec<Index>,
 }
 
 /// Control messages sent to the background task
@@ -58,7 +76,7 @@ enum Control {
 #[serde(tag = "type")]
 enum Message {
     AppendEntriesReq {
-        index: Index,
+        prev_index: Index,
         prev_term: Term,
         entries: Vec<LogEntry<char>>,
     },
@@ -79,8 +97,14 @@ impl RaftServer {
             network_size,
             leader,
             node,
-            log: RaftLog::new(),
             control_rx,
+            current_term: 0, // TODO: supposed to be persistent..
+            voted_for: None,
+            log: RaftLog::new(),
+            commit_index: 0,
+            last_applied: 0,
+            next_index: vec![],  // TODO
+            match_index: vec![], // TODO
         };
 
         RaftServer {
@@ -141,11 +165,11 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         self.log(format!("Handling message {:?} from {}", message, node_id));
         match message {
             Message::AppendEntriesReq {
-                index,
+                prev_index,
                 prev_term,
                 entries,
             } => {
-                let success = match self.log.append_entries(index, prev_term, entries) {
+                let success = match self.log.append_entries(prev_index, prev_term, entries) {
                     Ok(()) => true,
                     Err(_) => false,
                 };
@@ -161,7 +185,8 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
                 // If the append wasn't successful, decrement the match index for this peer
                 // and try again
-                if !success {}
+                //if !success {}
+                Ok(())
             }
         }
     }
@@ -174,19 +199,19 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
             Control::Add(item) => {
                 assert!(self.leader);
-                let term = 0; // TODO
-                let index = self.log.len() as Index;
-                let prev_term = if index > 0 {
-                    self.log.get(index - 1).term
+                let term = self.current_term;
+                let prev_index = self.log.len() as Index;
+                let prev_term = if prev_index > 1 {
+                    self.log.get(prev_index).term
                 } else {
                     term
                 };
                 let entry = LogEntry::new(term, item);
                 self.log
-                    .append_entries(index, prev_term, vec![entry.clone()])?;
+                    .append_entries(prev_index, prev_term, vec![entry.clone()])?;
 
                 let message = Message::AppendEntriesReq {
-                    index,
+                    prev_index,
                     prev_term,
                     entries: vec![entry],
                 };
@@ -228,14 +253,14 @@ mod test {
         leader.add('y').await?;
 
         let log = leader.debug().await?;
-        assert_eq!(log.get(0), &LogEntry::new(0, 'x'));
-        assert_eq!(log.get(1), &LogEntry::new(0, 'y'));
+        assert_eq!(log.get(1), &LogEntry::new(0, 'x'));
+        assert_eq!(log.get(2), &LogEntry::new(0, 'y'));
 
         // TODO: delay to let things settle?
 
         let log = follower.debug().await?;
-        assert_eq!(log.get(0), &LogEntry::new(0, 'x'));
-        assert_eq!(log.get(1), &LogEntry::new(0, 'y'));
+        assert_eq!(log.get(1), &LogEntry::new(0, 'x'));
+        assert_eq!(log.get(2), &LogEntry::new(0, 'y'));
 
         Ok(())
     }
