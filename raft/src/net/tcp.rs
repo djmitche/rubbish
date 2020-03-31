@@ -1,8 +1,11 @@
 use crate::net::{Message, NodeId, RaftNetworkNode};
 use async_trait::async_trait;
+use byteorder::{ByteOrder, NetworkEndian};
 use failure::Fallible;
 use net2::TcpBuilder;
+use nix::sys::socket::sockopt::ReusePort;
 use std::net::SocketAddr;
+use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
@@ -11,6 +14,9 @@ use tokio::task;
 use tokio::time::delay_for;
 
 // TODO: document the network of channels
+
+// set this to true to add a lot of println!
+const DEBUG: bool = false;
 
 /// A TcpConfig is a vector of nodes in the network, giving the address at which that node is
 /// listening.
@@ -47,6 +53,9 @@ struct TcpNodeInner {
 
     /// This node's address
     address: SocketAddr,
+
+    /// Config for this network
+    config: TcpConfig,
 
     /// channel containing messages to go out, multiplexed to the peers
     outgoing_rx: mpsc::Receiver<(NodeId, Message)>,
@@ -91,6 +100,9 @@ struct TcpPeerInner {
     /// Socket connected to the peer
     sock: Option<TcpStream>,
 
+    /// Buffer for assembling incoming messages
+    buffer: Vec<u8>,
+
     /// A channel for messages destined to this peer
     outgoing_rx: mpsc::Receiver<Message>,
 
@@ -114,6 +126,7 @@ impl TcpNode {
         let mut inner = TcpNodeInner {
             node_id,
             address: config[node_id].clone(),
+            config: config.clone(),
             outgoing_rx,
             stop_rx,
             peers: vec![],
@@ -162,34 +175,42 @@ impl RaftNetworkNode for TcpNode {
 
 impl TcpNodeInner {
     async fn run(mut self) {
-        let listener = TcpBuilder::new_v4()
-            .unwrap()
-            .reuse_address(true)
-            .unwrap()
-            .bind(self.address)
-            .unwrap()
-            .listen(5)
-            .unwrap();
-        let mut listener = TcpListener::from_std(listener).unwrap();
-        let (connection_tx, mut connection_rx) = mpsc::channel(1);
+        let mut listener = {
+            let listener = make_sock().unwrap();
+            self.log(format!("binding listening socket to {}", self.address));
+            let listener = listener.bind(self.address).unwrap();
+            let listener = listener.listen(5).unwrap();
+            TcpListener::from_std(listener).unwrap()
+        };
+        self.log(format!("listening on {}", self.address));
 
-        loop {
+        'select: loop {
+            self.log("LOOP");
             tokio::select! {
                 _ = self.stop_rx.recv() => break,
 
                 // a new TCP connection has arrived, but we need to determine which peer it is from
                 r = listener.accept() => {
-                    if let Ok((sock, _)) = r {
-                        let tx = connection_tx.clone();
-                        tokio::spawn(async move {
-                            TcpNodeInner::handle_accept(sock, tx.clone()).await;
-                        });
-                    }
-                },
+                    self.log("ACCEPT");
+                    match r {
+                        Ok((sock, addr)) => {
+                            self.log(format!("got connection from {:?}", addr));
 
-                // a new socket has come back from handle_accept..
-                Some((node_id, sock)) = connection_rx.recv() => {
-                    self.peers[node_id].connection_tx.send(sock).await.unwrap();
+                            // find the peer with this address
+                            for (node_id, peer_addr) in self.config.iter().enumerate() {
+                                if peer_addr == &addr {
+                                    self.log(format!("identified as node {}", node_id));
+                                    self.peers[node_id].connection_tx.send(sock).await.unwrap();
+                                    continue 'select;
+                                }
+                            }
+                            self.log(format!("unrecognized source address"));
+                            // note that if we didn't hand the socket off, we drop it here, closing it
+                        },
+                        Err(e) => {
+                            self.log(format!("error from accept: {}", e));
+                        },
+                    };
                 },
 
                 // for outgoing messages, queue them in the appropriate peer
@@ -211,20 +232,10 @@ impl TcpNodeInner {
         }
     }
 
-    /// Handle an incoming socket, reading the remote end's node_id from the socket and, if
-    /// successful, sending the connection back with that node id
-    async fn handle_accept(
-        mut sock: TcpStream,
-        mut connection_tx: mpsc::Sender<(NodeId, TcpStream)>,
-    ) {
-        match sock.read_u32().await {
-            Ok(node_id) => connection_tx.send((node_id as NodeId, sock)).await.unwrap(),
-            Err(_) => return, // ignore error
-        }
-    }
-
     fn log<S: AsRef<str>>(&self, msg: S) {
-        println!("node={} - {}", self.node_id, msg.as_ref());
+        if DEBUG {
+            println!("node={} - {}", self.node_id, msg.as_ref());
+        }
     }
 }
 
@@ -245,6 +256,7 @@ impl TcpPeer {
             peer_node_id,
             peer_address: config[peer_node_id].clone(),
             sock: None,
+            buffer: vec![],
             outgoing_rx: peer_outgoing_rx,
             connection_rx: peer_connection_rx,
             stop_rx: peer_stop_rx,
@@ -291,6 +303,8 @@ impl TcpPeerInner {
         }
     }
 
+    /// Start communication with this peer; this is a transient state that decides
+    /// how the socket connection will be initiated.
     async fn start(&mut self) -> TcpPeerState {
         self.log("entering state start");
         if self.peer_node_id < self.node_id {
@@ -302,6 +316,7 @@ impl TcpPeerInner {
         }
     }
 
+    /// Listen for an incoming connection from this peer.
     async fn listen(&mut self) -> TcpPeerState {
         self.log("entering state listen");
 
@@ -317,6 +332,8 @@ impl TcpPeerInner {
         }
     }
 
+    /// The call is coming from inside the house.  The peer is this node, so simply
+    /// loop messages back.
     async fn loopback(&mut self) -> TcpPeerState {
         self.log("entering state loopback");
         loop {
@@ -324,7 +341,7 @@ impl TcpPeerInner {
                 // as a loopback peer, we just add new messages to our own incoming
                 // queue
                 Some(msg) = self.outgoing_rx.recv() => {
-                    self.incoming_tx.send((self.node_id, msg)).await.unwrap();
+                    self.incoming_tx.send((self.peer_node_id, msg)).await.unwrap();
                 },
 
                 _ = self.stop_rx.recv() => return TcpPeerState::Stop,
@@ -332,73 +349,155 @@ impl TcpPeerInner {
         }
     }
 
+    /// Connect to the peer
     async fn connect(&mut self) -> TcpPeerState {
         self.log("entering state connect");
-        let sock = TcpBuilder::new_v4().unwrap();
-        let sock = sock.reuse_address(true).unwrap();
-        let sock = sock.bind(self.address).unwrap();
+        assert!(self.sock.is_none());
+        let sock = make_sock().unwrap();
+        // bind the local end to our address/port, so we can be recognized by listeners
+        let sock = match sock.bind(self.address) {
+            Ok(s) => s,
+            Err(e) => {
+                self.log(format!("Error binding: {}", e));
+                drop(sock);
+                return TcpPeerState::Wait;
+            }
+        };
         // TODO: BLOCKING connect?!
-        self.log(format!("Connecting to {:?}", self.address));
-        let sock = match sock.connect(self.address) {
+        self.log(format!("Connecting to {:?}", self.peer_address));
+        let sock = match sock.connect(self.peer_address) {
             Ok(s) => s,
             Err(e) => {
                 self.log(format!("Connect failed (retrying): {:?}", e));
+                drop(sock);
                 return TcpPeerState::Wait;
             }
         };
         let sock = TcpStream::from_std(sock).unwrap();
-        // XXX
-        //sock.write_u32(self.node_id as u32).await.unwrap(); // TODO: handle failure
         self.sock = Some(sock);
         return TcpPeerState::Connected;
     }
 
+    /// The peer is connected and `sock` is set correctly.
     async fn connected(&mut self) -> TcpPeerState {
         self.log("entering state connected");
-        assert!(self.sock.is_some());
+
+        let mut sock = self.sock.take().unwrap();
+        let mut buf = [0u8; 4096];
+
         loop {
             tokio::select! {
                 _ = self.stop_rx.recv() => return TcpPeerState::Stop,
 
                 // an outgoing message is sent to the peer
                 Some(msg) = self.outgoing_rx.recv() => {
+                    self.log(format!("sending {:?}", msg));
                     // TODO: this might hold up this loop (maybe add another state for writing?)
                     // TODO: this might fail (in which case go to Wait)
-                    self.sock.as_mut().unwrap().write_u32(msg.len() as u32).await.unwrap();
-                    self.sock.as_mut().unwrap().write_all(&msg[..]).await.unwrap();
+                    sock.write_u32(msg.len() as u32).await.unwrap();
+                    sock.write_all(&msg[..]).await.unwrap();
+                },
+                r = sock.read(&mut buf[..]) => {
+                    self.log("READ");
+                    match r {
+                        Ok(0) => {
+                            self.log(format!("EOF while reading"));
+                            return TcpPeerState::Wait;
+                        },
+                        Ok(n) => {
+                            self.log(format!("Ok({})", n));
+                            // append this to the buffer..
+                            self.buffer.extend_from_slice(&buf[..n]);
+                            // ..and process messages from the buffer
+                            while let Some(msg) = self.message_from_buffer() {
+                                self.log(format!("read msg {:?}", msg));
+                                self.incoming_tx.send((self.peer_node_id, msg)).await.unwrap();
+                            }
+                        },
+                        Err(e) => {
+                            self.log(format!("Error while reading: {}", e));
+                            return TcpPeerState::Wait;
+                        },
+                    }
                 },
             }
         }
     }
 
+    /// Something went wrong, so wait a bit and try again.
     async fn wait(&mut self) -> TcpPeerState {
         self.log("entering state wait");
         self.sock = None;
-        // TODO: do this in a loop
-        // TODO: start small, get up to 200ms or so
-        delay_for(Duration::from_millis(100)).await;
-        return TcpPeerState::Start;
+
+        tokio::select! {
+            _ = self.stop_rx.recv() => return TcpPeerState::Stop,
+
+            // TODO: start small, get up to 200ms or so
+            _ = delay_for(Duration::from_millis(100)) => return TcpPeerState::Start,
+        }
+    }
+
+    // utilities
+
+    fn message_from_buffer(&mut self) -> Option<Message> {
+        if self.buffer.len() < 4 {
+            return None;
+        }
+
+        let len = NetworkEndian::read_u32(&self.buffer[..4]) as usize;
+        if self.buffer.len() < 4 + len {
+            return None;
+        }
+
+        // split off the message and keep the remaining bytes in self.buffer
+        // TODO: extra allocations here..
+        let remaining = self.buffer.split_off(4 + len);
+        let msg = self.buffer[4..].to_vec();
+        self.buffer = remaining;
+
+        Some(msg)
     }
 
     fn log<S: AsRef<str>>(&self, msg: S) {
-        println!(
-            "node={} peer={} - {}",
-            self.node_id,
-            self.peer_node_id,
-            msg.as_ref()
-        );
+        if DEBUG {
+            println!(
+                "node={} peer={} - {}",
+                self.node_id,
+                self.peer_node_id,
+                msg.as_ref()
+            );
+        }
     }
+}
+
+fn make_sock() -> Fallible<TcpBuilder> {
+    let sock = TcpBuilder::new_v4()?;
+    sock.reuse_address(true)?;
+
+    // net2 doesn't support reuse_port, so we use nix..
+    nix::sys::socket::setsockopt(sock.as_raw_fd(), ReusePort, &true)?;
+
+    Ok(sock)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::atomic::{AtomicU16, Ordering};
+
+    /// Because all of these tests can run concurrently, they must use distinct port numbers.  We
+    /// cannot let the kernel choose the ports, because we must know all ports in advance.  So,
+    /// we generate a sequence of port numbers in a thread-safe fashion.
+    fn fresh_port() -> u16 {
+        static mut NEXT_PORT: AtomicU16 = AtomicU16::new(10000);
+        unsafe { NEXT_PORT.fetch_add(1, Ordering::SeqCst) }
+    }
 
     #[tokio::test]
     async fn test_stop() {
-        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 13000);
-        let socket2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 13001);
+        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let socket2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
         let cfg = vec![socket1, socket2];
         let node = TcpNode::new(0, cfg);
         node.stop().await;
@@ -406,7 +505,7 @@ mod test {
 
     #[tokio::test]
     async fn test_self_send() {
-        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 14000);
+        let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
         let cfg = vec![socket];
         let mut node = TcpNode::new(0, cfg);
         node.send(0, b"Hello".to_vec()).await.unwrap();
@@ -419,8 +518,8 @@ mod test {
     #[tokio::test]
     async fn test_send_uphill() {
         // "uphill" meaning from a low NodeId to a higher NodeId
-        let socket0 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 15000);
-        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 15001);
+        let socket0 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
         let cfg = vec![socket0, socket1];
         let mut node0 = TcpNode::new(0, cfg.clone());
         let mut node1 = TcpNode::new(1, cfg.clone());
@@ -428,6 +527,46 @@ mod test {
         let (node_id, msg) = node1.recv().await.unwrap();
         assert_eq!(node_id, 0);
         assert_eq!(msg, b"Hello");
+        node0.stop().await;
+        node1.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_send_downhill() {
+        // "downhill" meaning from a high NodeId to a lower NodeId
+        let socket0 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let cfg = vec![socket0, socket1];
+        let mut node0 = TcpNode::new(0, cfg.clone());
+        let mut node1 = TcpNode::new(1, cfg.clone());
+        node1.send(0, b"Hello".to_vec()).await.unwrap();
+        let (node_id, msg) = node0.recv().await.unwrap();
+        assert_eq!(node_id, 1);
+        assert_eq!(msg, b"Hello");
+        node0.stop().await;
+        node1.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_send_bidirectional() {
+        // "downhill" meaning from a high NodeId to a lower NodeId
+        let socket0 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let cfg = vec![socket0, socket1];
+        let mut node0 = TcpNode::new(0, cfg.clone());
+        let mut node1 = TcpNode::new(1, cfg.clone());
+
+        node1.send(0, b"Hello".to_vec()).await.unwrap();
+        node0.send(1, b"World".to_vec()).await.unwrap();
+
+        let (node_id, msg) = node0.recv().await.unwrap();
+        assert_eq!(node_id, 1);
+        assert_eq!(msg, b"Hello");
+
+        let (node_id, msg) = node1.recv().await.unwrap();
+        assert_eq!(node_id, 0);
+        assert_eq!(msg, b"World");
+
         node0.stop().await;
         node1.stop().await;
     }

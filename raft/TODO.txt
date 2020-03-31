@@ -1,6 +1,7 @@
 ## crate::net::tcp
 
-* Send node id on first connect
+* Expire outgoing messages if not sent in 500 ms or whatever
 * Write messages while still monitoring for stopping
+* use either net2 or nix, not both
 * Figure out how to do a nonblocking connect with a socket from net2
 * Make the wait state back off up to 1000ms or something
