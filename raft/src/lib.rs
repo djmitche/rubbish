@@ -11,6 +11,7 @@ mod errors;
 pub mod kv;
 pub mod log;
 pub mod net;
+pub mod server;
 pub mod transport;
 pub(crate) mod util;
 

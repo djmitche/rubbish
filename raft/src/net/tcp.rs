@@ -233,7 +233,7 @@ impl TcpNodeInner {
     }
 
     fn log<S: AsRef<str>>(&self, msg: S) {
-        if DEBUG {
+        if cfg!(debug) && DEBUG {
             println!("node={} - {}", self.node_id, msg.as_ref());
         }
     }
@@ -459,7 +459,7 @@ impl TcpPeerInner {
     }
 
     fn log<S: AsRef<str>>(&self, msg: S) {
-        if DEBUG {
+        if cfg!(debug) && DEBUG {
             println!(
                 "node={} peer={} - {}",
                 self.node_id,

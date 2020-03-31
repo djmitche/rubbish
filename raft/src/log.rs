@@ -1,8 +1,9 @@
 use crate::{Index, Term};
 use failure::{err_msg, Fallible};
+use serde::{Deserialize, Serialize};
 
 /// A LogEntry is an entry in a RaftLog.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LogEntry<I> {
     pub term: Term,
     pub item: I,
@@ -16,30 +17,30 @@ pub struct RaftLog<I> {
 }
 
 impl<I> LogEntry<I> {
-    fn new(term: Term, item: I) -> LogEntry<I> {
+    pub fn new(term: Term, item: I) -> LogEntry<I> {
         LogEntry { term, item }
     }
 }
 
 impl<I> RaftLog<I> {
     /// Create an empty log
-    fn new() -> RaftLog<I> {
+    pub fn new() -> RaftLog<I> {
         RaftLog { entries: vec![] }
     }
 
     /// Get the number of entries
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Get an entry by its index
-    fn get(&self, index: Index) -> &LogEntry<I> {
+    pub fn get(&self, index: Index) -> &LogEntry<I> {
         &self.entries[index as usize]
     }
 
     /// Append entries to the log, applying the necessary rules from the Raft protocol and
     /// returning false if those fail
-    fn append_entries(
+    pub fn append_entries(
         &mut self,
         index: Index,
         prev_term: Term,

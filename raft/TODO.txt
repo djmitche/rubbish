@@ -1,3 +1,12 @@
+## Misc
+
+* Handle message ser/de somewhere better
+* Parameterize better on item.. (currently char)
+
+## crate::net
+
+* function on node to give network size, current node id
+
 ## crate::net::tcp
 
 * Expire outgoing messages if not sent in 500 ms or whatever
