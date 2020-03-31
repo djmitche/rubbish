@@ -79,7 +79,7 @@ impl<I> RaftLog<I> {
 mod test {
     use super::*;
 
-    type Item = u16;
+    type Item = char;
 
     #[test]
     fn len_zero() {
@@ -90,7 +90,7 @@ mod test {
     #[test]
     fn len_nonzero() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(0, 13), LogEntry::new(0, 14)])?;
+        log.append_entries(0, 0, vec![LogEntry::new(0, 'a'), LogEntry::new(0, 'b')])?;
         assert_eq!(log.len(), 2);
         Ok(())
     }
@@ -98,16 +98,16 @@ mod test {
     #[test]
     fn get() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(0, 13), LogEntry::new(0, 14)])?;
-        assert_eq!(log.get(0), &LogEntry::new(0, 13));
-        assert_eq!(log.get(1), &LogEntry::new(0, 14));
+        log.append_entries(0, 0, vec![LogEntry::new(0, 'a'), LogEntry::new(0, 'b')])?;
+        assert_eq!(log.get(0), &LogEntry::new(0, 'a'));
+        assert_eq!(log.get(1), &LogEntry::new(0, 'b'));
         Ok(())
     }
 
     #[test]
     fn append_with_gaps() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(0, 13), LogEntry::new(0, 14)])?;
+        log.append_entries(0, 0, vec![LogEntry::new(0, 'a'), LogEntry::new(0, 'b')])?;
         assert!(log.append_entries(3, 0, vec![]).is_err());
         Ok(())
     }
@@ -115,7 +115,7 @@ mod test {
     #[test]
     fn append_with_mismatched_prev_term() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(100, 13), LogEntry::new(200, 14)])?;
+        log.append_entries(0, 0, vec![LogEntry::new(100, 'a'), LogEntry::new(200, 'b')])?;
         assert!(log.append_entries(1, 999, vec![]).is_err());
         Ok(())
     }
@@ -123,37 +123,119 @@ mod test {
     #[test]
     fn append_entries_appends() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(100, 13), LogEntry::new(200, 14)])?;
-        log.append_entries(2, 200, vec![LogEntry::new(300, 15), LogEntry::new(300, 16)])?;
-        assert_eq!(log.get(0), &LogEntry::new(100, 13));
-        assert_eq!(log.get(1), &LogEntry::new(200, 14));
-        assert_eq!(log.get(2), &LogEntry::new(300, 15));
-        assert_eq!(log.get(3), &LogEntry::new(300, 16));
+        log.append_entries(0, 0, vec![LogEntry::new(100, 'a'), LogEntry::new(200, 'b')])?;
+        log.append_entries(
+            2,
+            200,
+            vec![LogEntry::new(300, 'c'), LogEntry::new(300, 'd')],
+        )?;
+        assert_eq!(log.get(0), &LogEntry::new(100, 'a'));
+        assert_eq!(log.get(1), &LogEntry::new(200, 'b'));
+        assert_eq!(log.get(2), &LogEntry::new(300, 'c'));
+        assert_eq!(log.get(3), &LogEntry::new(300, 'd'));
         Ok(())
     }
 
     #[test]
     fn append_entries_overwrites() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(100, 13), LogEntry::new(200, 14)])?;
-        log.append_entries(1, 100, vec![LogEntry::new(300, 15), LogEntry::new(300, 16)])?;
-        assert_eq!(log.get(0), &LogEntry::new(100, 13));
-        assert_eq!(log.get(1), &LogEntry::new(300, 15));
-        assert_eq!(log.get(2), &LogEntry::new(300, 16));
+        log.append_entries(0, 0, vec![LogEntry::new(100, 'a'), LogEntry::new(200, 'b')])?;
+        log.append_entries(
+            1,
+            100,
+            vec![LogEntry::new(300, 'c'), LogEntry::new(300, 'd')],
+        )?;
+        assert_eq!(log.get(0), &LogEntry::new(100, 'a'));
+        assert_eq!(log.get(1), &LogEntry::new(300, 'c'));
+        assert_eq!(log.get(2), &LogEntry::new(300, 'd'));
         Ok(())
     }
 
     #[test]
     fn append_entries_idempotent() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(100, 13), LogEntry::new(200, 14)])?;
+        log.append_entries(0, 0, vec![LogEntry::new(100, 'a'), LogEntry::new(200, 'b')])?;
 
-        log.append_entries(1, 100, vec![LogEntry::new(300, 15), LogEntry::new(300, 16)])?;
+        log.append_entries(
+            1,
+            100,
+            vec![LogEntry::new(300, 'c'), LogEntry::new(300, 'd')],
+        )?;
         let orig = log.clone();
-        log.append_entries(1, 100, vec![LogEntry::new(300, 15), LogEntry::new(300, 16)])?;
-        log.append_entries(1, 100, vec![LogEntry::new(300, 15), LogEntry::new(300, 16)])?;
+        log.append_entries(
+            1,
+            100,
+            vec![LogEntry::new(300, 'c'), LogEntry::new(300, 'd')],
+        )?;
+        log.append_entries(
+            1,
+            100,
+            vec![LogEntry::new(300, 'c'), LogEntry::new(300, 'd')],
+        )?;
 
         assert_eq!(orig, log);
+        Ok(())
+    }
+
+    // test cases from Figure 7
+
+    fn case(terms: Vec<Term>) -> RaftLog<Item> {
+        let mut log: RaftLog<Item> = RaftLog::new();
+        log.append_entries(0, 0, terms.iter().map(|t| LogEntry::new(*t, 'x')).collect())
+            .unwrap();
+        log
+    }
+
+    #[test]
+    fn figure_7_a() -> Fallible<()> {
+        let mut log = case(vec![1, 1, 1, 4, 4, 5, 5, 6, 6]);
+        assert!(log
+            .append_entries(10, 6, vec![LogEntry::new(8, 'x')])
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn figure_7_b() -> Fallible<()> {
+        let mut log = case(vec![1, 1, 1, 4]);
+        assert!(log
+            .append_entries(10, 6, vec![LogEntry::new(8, 'x')])
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn figure_7_c() -> Fallible<()> {
+        let mut log = case(vec![1, 1, 1, 4, 4, 5, 5, 6, 6, 6, 6]);
+        log.append_entries(10, 6, vec![LogEntry::new(8, 'x')])?;
+        assert_eq!(log.get(10), &LogEntry::new(8, 'x'));
+        Ok(())
+    }
+
+    #[test]
+    fn figure_7_d() -> Fallible<()> {
+        let mut log = case(vec![1, 1, 1, 4, 4, 5, 5, 6, 6, 6, 7, 7]);
+        log.append_entries(10, 6, vec![LogEntry::new(8, 'x')])?;
+        assert_eq!(log.get(10), &LogEntry::new(8, 'x'));
+        assert_eq!(log.len(), 11);
+        Ok(())
+    }
+
+    #[test]
+    fn figure_7_e() -> Fallible<()> {
+        let mut log = case(vec![1, 1, 1, 4, 4, 4, 4]);
+        assert!(log
+            .append_entries(10, 6, vec![LogEntry::new(8, 'x')])
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn figure_7_f() -> Fallible<()> {
+        let mut log = case(vec![1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3]);
+        assert!(log
+            .append_entries(10, 6, vec![LogEntry::new(8, 'x')])
+            .is_err());
         Ok(())
     }
 }
