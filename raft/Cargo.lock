@@ -154,6 +154,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "memchr"
+version = "2.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3728d817d99e5ac407411fa471ff9800a778d88a24685968b36824eaf4bee400"
+
+[[package]]
 name = "mio"
 version = "0.6.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -226,6 +232,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "failure",
+ "net2",
  "serde",
  "serde_json",
  "tokio",
@@ -313,8 +320,10 @@ dependencies = [
  "fnv",
  "iovec",
  "lazy_static",
+ "memchr",
  "mio",
  "pin-project-lite",
+ "slab",
  "tokio-macros",
 ]
 
