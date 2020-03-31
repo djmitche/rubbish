@@ -10,7 +10,7 @@ pub struct LogEntry<I> {
 }
 
 /// A RaftLog represents the central data structure in raft, and enforces correct access to that
-/// log.
+/// log.  Note that indexes are 1-based!
 #[derive(Clone, Debug, PartialEq)]
 pub struct RaftLog<I> {
     entries: Vec<LogEntry<I>>,
@@ -35,42 +35,41 @@ impl<I> RaftLog<I> {
 
     /// Get an entry by its index
     pub fn get(&self, index: Index) -> &LogEntry<I> {
-        &self.entries[index as usize]
+        assert!(index >= 1, "logs have no index 0");
+        &self.entries[index as usize - 1]
     }
 
     /// Append entries to the log, applying the necessary rules from the Raft protocol and
     /// returning false if those fail
     pub fn append_entries(
         &mut self,
-        index: Index,
+        prev_index: Index,
         prev_term: Term,
         entries: Vec<LogEntry<I>>,
     ) -> Fallible<()> {
         let len = self.len();
 
         // Rule 1: no gaps in the log indexes
-        if index > len as u64 {
+        if prev_index > len as u64 {
             return Err(err_msg(format!(
-                "Index {} is higher than the next index {}",
-                index, len
+                "prev_index {} is not present in this log",
+                prev_index
             )));
         }
 
         // Rule 2/3: prev_term
-        if index > 0 {
-            let last = &self.entries[index as usize - 1];
-            if last.term != prev_term {
+        if prev_index >= 1 {
+            let prev = &self.get(prev_index);
+            if prev.term != prev_term {
                 return Err(err_msg(format!(
                     "Entry at index {} has term {} but expected term {}",
-                    index - 1,
-                    last.term,
-                    prev_term
+                    prev_index, prev.term, prev_term
                 )));
             }
         }
 
         // insert the entries, replacing any at the given index and above
-        self.entries.splice((index as usize).., entries);
+        self.entries.splice((prev_index as usize).., entries);
 
         Ok(())
     }
@@ -100,8 +99,8 @@ mod test {
     fn get() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
         log.append_entries(0, 0, vec![LogEntry::new(0, 'a'), LogEntry::new(0, 'b')])?;
-        assert_eq!(log.get(0), &LogEntry::new(0, 'a'));
-        assert_eq!(log.get(1), &LogEntry::new(0, 'b'));
+        assert_eq!(log.get(1), &LogEntry::new(0, 'a'));
+        assert_eq!(log.get(2), &LogEntry::new(0, 'b'));
         Ok(())
     }
 
@@ -130,10 +129,10 @@ mod test {
             200,
             vec![LogEntry::new(300, 'c'), LogEntry::new(300, 'd')],
         )?;
-        assert_eq!(log.get(0), &LogEntry::new(100, 'a'));
-        assert_eq!(log.get(1), &LogEntry::new(200, 'b'));
-        assert_eq!(log.get(2), &LogEntry::new(300, 'c'));
-        assert_eq!(log.get(3), &LogEntry::new(300, 'd'));
+        assert_eq!(log.get(1), &LogEntry::new(100, 'a'));
+        assert_eq!(log.get(2), &LogEntry::new(200, 'b'));
+        assert_eq!(log.get(3), &LogEntry::new(300, 'c'));
+        assert_eq!(log.get(4), &LogEntry::new(300, 'd'));
         Ok(())
     }
 
@@ -146,9 +145,9 @@ mod test {
             100,
             vec![LogEntry::new(300, 'c'), LogEntry::new(300, 'd')],
         )?;
-        assert_eq!(log.get(0), &LogEntry::new(100, 'a'));
-        assert_eq!(log.get(1), &LogEntry::new(300, 'c'));
-        assert_eq!(log.get(2), &LogEntry::new(300, 'd'));
+        assert_eq!(log.get(1), &LogEntry::new(100, 'a'));
+        assert_eq!(log.get(2), &LogEntry::new(300, 'c'));
+        assert_eq!(log.get(3), &LogEntry::new(300, 'd'));
         Ok(())
     }
 
@@ -209,7 +208,7 @@ mod test {
     fn figure_7_c() -> Fallible<()> {
         let mut log = case(vec![1, 1, 1, 4, 4, 5, 5, 6, 6, 6, 6]);
         log.append_entries(10, 6, vec![LogEntry::new(8, 'x')])?;
-        assert_eq!(log.get(10), &LogEntry::new(8, 'x'));
+        assert_eq!(log.get(11), &LogEntry::new(8, 'x'));
         Ok(())
     }
 
@@ -217,7 +216,7 @@ mod test {
     fn figure_7_d() -> Fallible<()> {
         let mut log = case(vec![1, 1, 1, 4, 4, 5, 5, 6, 6, 6, 7, 7]);
         log.append_entries(10, 6, vec![LogEntry::new(8, 'x')])?;
-        assert_eq!(log.get(10), &LogEntry::new(8, 'x'));
+        assert_eq!(log.get(11), &LogEntry::new(8, 'x'));
         assert_eq!(log.len(), 11);
         Ok(())
     }
