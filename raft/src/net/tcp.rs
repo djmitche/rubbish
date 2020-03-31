@@ -194,7 +194,7 @@ impl TcpNodeInner {
 
                 // for outgoing messages, queue them in the appropriate peer
                 Some((node_id, msg)) = self.outgoing_rx.recv() => {
-                    println!("distribute {:?} to TcpPeerInner {:?}", msg, node_id);
+                    self.log(format!("distribute {:?} to TcpPeerInner {:?}", msg, node_id));
                     self.peers[node_id].outgoing_tx.send(msg).await.unwrap();
                 },
             }
@@ -202,7 +202,7 @@ impl TcpNodeInner {
 
         // when we get a message on the stop channel, stop the peer
         // connections and then stop the loop..
-        println!("stopping node {}", self.node_id);
+        self.log("stopping");
         for peer in self.peers.iter_mut() {
             peer.stop_tx.send(()).await.unwrap();
         }
@@ -221,6 +221,10 @@ impl TcpNodeInner {
             Ok(node_id) => connection_tx.send((node_id as NodeId, sock)).await.unwrap(),
             Err(_) => return, // ignore error
         }
+    }
+
+    fn log<S: AsRef<str>>(&self, msg: S) {
+        println!("node={} - {}", self.node_id, msg.as_ref());
     }
 }
 
@@ -288,7 +292,7 @@ impl TcpPeerInner {
     }
 
     async fn start(&mut self) -> TcpPeerState {
-        println!("peer {} entering state start", self.peer_node_id);
+        self.log("entering state start");
         if self.peer_node_id < self.node_id {
             return TcpPeerState::Listen;
         } else if self.peer_node_id == self.node_id {
@@ -299,7 +303,7 @@ impl TcpPeerInner {
     }
 
     async fn listen(&mut self) -> TcpPeerState {
-        println!("peer {} entering state listen", self.peer_node_id);
+        self.log("entering state listen");
 
         loop {
             tokio::select! {
@@ -314,7 +318,7 @@ impl TcpPeerInner {
     }
 
     async fn loopback(&mut self) -> TcpPeerState {
-        println!("peer {} entering state loopback", self.peer_node_id);
+        self.log("entering state loopback");
         loop {
             tokio::select! {
                 // as a loopback peer, we just add new messages to our own incoming
@@ -329,15 +333,16 @@ impl TcpPeerInner {
     }
 
     async fn connect(&mut self) -> TcpPeerState {
-        println!("peer {} entering state connect", self.peer_node_id);
+        self.log("entering state connect");
         let sock = TcpBuilder::new_v4().unwrap();
         let sock = sock.reuse_address(true).unwrap();
+        let sock = sock.bind(self.address).unwrap();
         // TODO: BLOCKING connect?!
-        println!("Connecting to {:?}", self.address);
+        self.log(format!("Connecting to {:?}", self.address));
         let sock = match sock.connect(self.address) {
             Ok(s) => s,
             Err(e) => {
-                println!("Connect failed (retrying): {:?}", e);
+                self.log(format!("Connect failed (retrying): {:?}", e));
                 return TcpPeerState::Wait;
             }
         };
@@ -349,7 +354,7 @@ impl TcpPeerInner {
     }
 
     async fn connected(&mut self) -> TcpPeerState {
-        println!("peer {} entering state connected", self.peer_node_id);
+        self.log("entering state connected");
         assert!(self.sock.is_some());
         loop {
             tokio::select! {
@@ -367,12 +372,21 @@ impl TcpPeerInner {
     }
 
     async fn wait(&mut self) -> TcpPeerState {
-        println!("peer {} entering state wait", self.peer_node_id);
+        self.log("entering state wait");
         self.sock = None;
         // TODO: do this in a loop
         // TODO: start small, get up to 200ms or so
         delay_for(Duration::from_millis(100)).await;
         return TcpPeerState::Start;
+    }
+
+    fn log<S: AsRef<str>>(&self, msg: S) {
+        println!(
+            "node={} peer={} - {}",
+            self.node_id,
+            self.peer_node_id,
+            msg.as_ref()
+        );
     }
 }
 
@@ -400,5 +414,21 @@ mod test {
         assert_eq!(node_id, 0);
         assert_eq!(msg, b"Hello");
         node.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_send_uphill() {
+        // "uphill" meaning from a low NodeId to a higher NodeId
+        let socket0 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 15000);
+        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 15001);
+        let cfg = vec![socket0, socket1];
+        let mut node0 = TcpNode::new(0, cfg.clone());
+        let mut node1 = TcpNode::new(1, cfg.clone());
+        node0.send(1, b"Hello".to_vec()).await.unwrap();
+        let (node_id, msg) = node1.recv().await.unwrap();
+        assert_eq!(node_id, 0);
+        assert_eq!(msg, b"Hello");
+        node0.stop().await;
+        node1.stop().await;
     }
 }

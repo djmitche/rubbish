@@ -1,0 +1,6 @@
+## crate::net::tcp
+
+* Send node id on first connect
+* Write messages while still monitoring for stopping
+* Figure out how to do a nonblocking connect with a socket from net2
+* Make the wait state back off up to 1000ms or something
