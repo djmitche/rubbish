@@ -7,6 +7,7 @@
 
 * Handle message ser/de somewhere better
 * Parameterize better on item.. (currently char)
+* log.last_entry(), log.next_index() instead of .len? (and move all usize <-> u64 in there)
 
 ## Server
 

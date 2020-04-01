@@ -36,9 +36,6 @@ pub struct RaftServer {
 
 #[derive(Debug)]
 pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
-    /// True if this server is the lader
-    leader: bool, // XXX temp
-
     /*
      * Mechanics
      */
@@ -57,6 +54,9 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     /*
      * Algorithm State
      */
+    /// Current server mode
+    mode: Mode,
+
     /// "latest term the server has seen"
     current_term: Term,
 
@@ -96,16 +96,27 @@ enum Control {
     GetState(mpsc::Sender<ServerState>),
 }
 
+/// A Timer is an event that is scheduled at some future time.
 #[derive(Debug)]
 enum Timer {
     /// This follower may not have gotten an AppendEntriesReq in a while
     FollowerUpdate(NodeId),
 }
 
+/// The current mode of the server
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Mode {
+    Follower,
+    Candidate,
+    Leader,
+}
+
 /// State of the server, used for debugging with get_state
 #[cfg(test)]
 #[derive(Debug)]
 struct ServerState {
+    mode: Mode,
+
     /// "latest term the server has seen"
     current_term: Term,
 
@@ -150,15 +161,15 @@ enum Message {
 }
 
 impl RaftServer {
-    pub fn new<N: RaftNetworkNode + Sync + Send + 'static>(leader: bool, node: N) -> RaftServer {
+    pub fn new<N: RaftNetworkNode + Sync + Send + 'static>(node: N) -> RaftServer {
         let (control_tx, control_rx) = mpsc::channel(1);
         let network_size = node.network_size();
         let inner = RaftServerInner {
-            leader,
             node,
             timers: DelayQueue::new(),
             last_append_entries: iter::repeat_with(|| None).take(network_size).collect(),
             control_rx,
+            mode: Mode::Follower,
             current_term: 0,
             current_leader: None,
             voted_for: None,
@@ -280,7 +291,8 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 success,
                 next_index,
             } => {
-                if !self.leader {
+                if self.mode != Mode::Leader {
+                    // don't care anymore..
                     return Ok(());
                 }
 
@@ -321,7 +333,10 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             Control::Stop => Ok(true),
 
             Control::Add(item) => {
-                assert!(self.leader);
+                if self.mode != Mode::Leader {
+                    // TODO: send a reply referring the caller to the leader..
+                    return Ok(false);
+                }
                 let term = self.current_term;
                 let entry = LogEntry::new(term, item);
                 let prev_log_index = self.log.len() as Index;
@@ -346,6 +361,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             #[cfg(test)]
             Control::GetState(mut tx) => {
                 let state = ServerState {
+                    mode: self.mode,
                     current_term: self.current_term,
                     current_leader: self.current_leader,
                     voted_for: self.voted_for,
@@ -404,9 +420,9 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
     fn log<S: AsRef<str>>(&self, msg: S) {
         if cfg!(test) && DEBUG {
             println!(
-                "server={} leader={} - {}",
+                "server={} mode={:?} - {}",
                 self.node.node_id(),
-                self.leader,
+                self.mode,
                 msg.as_ref()
             );
         }
@@ -422,8 +438,8 @@ mod test {
     #[tokio::test]
     async fn append_entries() -> Fallible<()> {
         let mut net = make_network(2);
-        let mut leader = RaftServer::new(true, net.remove(0));
-        let mut follower = RaftServer::new(false, net.remove(0));
+        let mut leader = RaftServer::new(net.remove(0));
+        let mut follower = RaftServer::new(net.remove(0));
 
         leader.add('x').await?;
         leader.add('y').await?;
