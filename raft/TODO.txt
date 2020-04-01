@@ -1,6 +1,5 @@
 ## Doc
 
-* doc channels
 * doc deviations from paper
   * AppendEntriesRep contains info implicitly in the context of the RPC (next_index)
 

@@ -13,7 +13,40 @@ use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::delay_for;
 
-// TODO: document the network of channels
+/* A few words about the structure here.
+ *
+ * A network is composed of multiple nodes.  Typically only one node is running in a process, but
+ * during testing multiple nodes may coexist within a single process.  This is represented by a
+ * TcpNode, which implements RaftNetworkNode.
+ *
+ * The node has a TcpPeer object for each node on the network (including itself) that handles
+ * communication with that peer.
+ *
+ * The TcpNode itself and each TcpPeer have an "inner" object containing dynamic state as well as a
+ * Tokio task to manage that state.  All communication between objects are handled via channels,
+ * avoiding any shared state.  The two ends of each channel are named uniquely with <prefix>_tx for
+ * the Sender end and <prefix>_rx for the Receiver end.  These two values typically end up in
+ * different objects, but the names indicate the connection.
+ *
+ * The TcpNode, the public API, has three channels to communicate with its inner object:
+ *
+ *  - outgoing_tx is connected to the TcpNodeInner's outgoing_rx and handles outgoing messages,
+ *    tagged with a destination node ID
+ *  - incoming_rx is connected to incoming_tx on all TcpPeerInner objects and carries messages
+ *    coming in to this node
+ *  - stop_tx is connected to the TcpNodeInner's stop_rx and is a control channel used to signal
+ *    the node's task to stop
+ *
+ * Each TcpPeer has three channels:
+ *  - outgoing_tx is connected to the TcpPeerInner's outgoing_rx and carries messages destined
+ *    for this peer.  TcpNode simply routes messages from its outgoing_rx to the appropriate peer's
+ *    outgoing_tx.
+ *  - connection_tx is connected to the TcpPeerInner's connection_rx and carries TcpStream objects
+ *    from the TcpNode's listening socket to the appropriate TcpPeer.
+ *  - stop_tx is connected to the TcpPeerInneres stop_rx and is a control channel used to signal
+ *    the peer's task to stop.  The node uses this channel to stop all peer tasks before stopping
+ *    itself.
+ */
 
 // set this to true to add a lot of println!
 const DEBUG: bool = false;
@@ -296,8 +329,22 @@ enum TcpPeerState {
 }
 
 impl TcpPeerInner {
-    // This implements a simple state machine where the state is defined by the current method.
-    // This results in a bit of duplicate code, but it's minimal
+    /* This implements a simple state machine, with each state represented by an
+     * enum value and a method of the same name.
+     *
+     * The state graph is
+     *          +-> Listen ----+
+     *         /                \
+     * Start --+-> Loopback      +-> Connected --> Wait -+
+     *   ^     \                /                        /
+     *   |      +-> Connect ---+                        /
+     *   +---------------------------------------------+
+     *
+     * The decision on which state to enter from Start is based on the relation
+     * between this node's ID and the peer's ID.  Between any two nodes, the lower-
+     * numbered node is responsible for connecting to the higher-numbered node.
+     * The Loopback state is for communicating to the local node (peer == node_id).
+     */
 
     async fn run(mut self) {
         let mut state = TcpPeerState::Start;
@@ -328,7 +375,9 @@ impl TcpPeerInner {
         }
     }
 
-    /// Listen for an incoming connection from this peer.
+    /// Listen for an incoming connection from this peer.  Connections are delivered
+    /// over a channel from a listening socket in the TcpNode.  Once we have a
+    /// connection, enter the Connected state.
     async fn listen(&mut self) -> TcpPeerState {
         self.log("entering state listen");
 
@@ -361,7 +410,7 @@ impl TcpPeerInner {
         }
     }
 
-    /// Connect to the peer
+    /// Connect to the peer, and once a connection is established, enter the Connected state.
     async fn connect(&mut self) -> TcpPeerState {
         self.log("entering state connect");
         assert!(self.sock.is_none());
@@ -375,7 +424,8 @@ impl TcpPeerInner {
                 return TcpPeerState::Wait;
             }
         };
-        // TODO: BLOCKING connect?!
+        // TODO: BLOCKING connect?!  How can we do a non-blocking connect with
+        // a bound socket?
         self.log(format!("Connecting to {:?}", self.peer_address));
         let sock = match sock.connect(self.peer_address) {
             Ok(s) => s,
@@ -390,7 +440,8 @@ impl TcpPeerInner {
         return TcpPeerState::Connected;
     }
 
-    /// The peer is connected and `sock` is set correctly.
+    /// The peer is connected and `sock` is set correctly.  Communicate over that socket
+    /// until an error occurs, at which point enter the Wait state.
     async fn connected(&mut self) -> TcpPeerState {
         self.log("entering state connected");
 
@@ -436,7 +487,7 @@ impl TcpPeerInner {
         }
     }
 
-    /// Something went wrong, so wait a bit and try again.
+    /// Something went wrong, so wait a bit and try again. by returning to Start.
     async fn wait(&mut self) -> TcpPeerState {
         self.log("entering state wait");
         self.sock = None;
@@ -451,6 +502,8 @@ impl TcpPeerInner {
 
     // utilities
 
+    /// Extract a message from self.buffer, if the entire message is present, and
+    /// leave any remaining bytes in the buffer.
     fn message_from_buffer(&mut self) -> Option<Message> {
         if self.buffer.len() < 4 {
             return None;

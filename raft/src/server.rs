@@ -10,10 +10,9 @@ use tokio::task;
 /// Set this to true to enable lots of println!
 const DEBUG: bool = true;
 
-/// A RaftServer represents a running server participating in a Raft.  Most of the
-/// work of such a server occurs in the background.  In fact, all of the work occurs
-/// in the background to simplify ownership of the data structures, and all
-/// communication occurs via a control channel.
+/// A RaftServer represents a running server participating in a Raft.
+///
+
 #[derive(Debug)]
 pub struct RaftServer {
     /// The background task receiving messages for this server
@@ -22,6 +21,13 @@ pub struct RaftServer {
     /// A channel to send control messages to the background task
     control_tx: mpsc::Sender<Control>,
 }
+
+/* Most of the work of a server occurs in a background task, reacting to messages and timers.  In
+ * fact, all of the work occurs in the background to simplify ownership of the data structures, and
+ * all communication occurs control_tx / control_rx.  Public methods simply send control messages
+ * to the background task.  In cases where a reply is required, the control message contains a
+ * transient channel to carry the response.
+ */
 
 #[derive(Debug)]
 pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
