@@ -249,9 +249,8 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     };
                 }
 
+                // If the update was successful, so do some bookkeeping:
                 if success {
-                    // Update was successful, so do some bookkeeping:
-
                     // Update our commit index based on what the leader has told us, but
                     // not beyond the entries we have received.
                     if leader_commit > self.commit_index {
@@ -286,8 +285,9 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 }
 
                 if success {
-                    // If the append was successful, then update next_index accordingly
+                    // If the append was successful, then update next_index and match_index accordingly
                     self.next_index[peer] = next_index;
+                    self.match_index[peer] = next_index - 1;
                 } else {
                     // If the append wasn't successful, select a lower match index for this peer
                     // and try again.  The peer sends the index of the first empty slot in the log,
