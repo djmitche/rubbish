@@ -60,6 +60,9 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     /// "latest term the server has seen"
     current_term: Term,
 
+    /// Current leader, if known
+    current_leader: Option<NodeId>,
+
     /// "candidateId that received vote in current term (or null if none)"
     voted_for: Option<NodeId>,
 
@@ -106,6 +109,9 @@ struct ServerState {
     /// "latest term the server has seen"
     current_term: Term,
 
+    /// Current leader, if known
+    current_leader: Option<NodeId>,
+
     /// "candidateId that received vote in current term (or null if none)"
     voted_for: Option<NodeId>,
 
@@ -129,9 +135,12 @@ struct ServerState {
 #[serde(tag = "type")]
 enum Message {
     AppendEntriesReq {
-        prev_index: Index,
-        prev_term: Term,
+        term: Term,
+        leader: NodeId,
+        prev_log_index: Index,
+        prev_log_term: Term,
         entries: Vec<LogEntry<char>>,
+        leader_commit: Index,
     },
     AppendEntriesRep {
         term: Term,
@@ -151,6 +160,7 @@ impl RaftServer {
             last_append_entries: iter::repeat_with(|| None).take(network_size).collect(),
             control_rx,
             current_term: 0,
+            current_leader: None,
             voted_for: None,
             log: RaftLog::new(),
             commit_index: 0,
@@ -218,19 +228,45 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         self.log(format!("Handling Message {:?} from {}", message, peer));
         match message {
             Message::AppendEntriesReq {
-                prev_index,
-                prev_term,
+                term,
+                leader,
+                prev_log_index,
+                prev_log_term,
                 entries,
+                leader_commit,
             } => {
-                // TODO: check term
-                let success = match self.log.append_entries(prev_index, prev_term, entries) {
-                    Ok(()) => true,
-                    Err(_) => false,
-                };
+                // Reject this request if term < our current_term
+                let mut success = term >= self.current_term;
+
+                // Reject this request if the log does not apply cleanly
+                if success {
+                    success = match self
+                        .log
+                        .append_entries(prev_log_index, prev_log_term, entries)
+                    {
+                        Ok(()) => true,
+                        Err(_) => false,
+                    };
+                }
+
+                if success {
+                    // Update was successful, so do some bookkeeping:
+
+                    // Update our commit index based on what the leader has told us, but
+                    // not beyond the entries we have received.
+                    if leader_commit > self.commit_index {
+                        self.commit_index = cmp::min(leader_commit, self.log.len() as Index);
+                    }
+
+                    // Update our current term if this is from a newer leader
+                    self.current_term = term;
+                    self.current_leader = Some(leader);
+                }
+
                 self.send_to(
                     peer,
                     &Message::AppendEntriesRep {
-                        term: 0,
+                        term: self.current_term,
                         success,
                         next_index: self.log.len() as Index + 1,
                     },
@@ -288,16 +324,16 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 assert!(self.leader);
                 let term = self.current_term;
                 let entry = LogEntry::new(term, item);
-                let prev_index = self.log.len() as Index;
-                let prev_term = if prev_index > 1 {
-                    self.log.get(prev_index).term
+                let prev_log_index = self.log.len() as Index;
+                let prev_log_term = if prev_log_index > 1 {
+                    self.log.get(prev_log_index).term
                 } else {
                     0
                 };
 
                 // append one entry locally (this will always succeed)
                 self.log
-                    .append_entries(prev_index, prev_term, vec![entry.clone()])?;
+                    .append_entries(prev_log_index, prev_log_term, vec![entry.clone()])?;
 
                 // then send AppendEntries to all nodes (including ourselves)
                 for peer in 0..self.node.network_size() {
@@ -311,6 +347,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             Control::GetState(mut tx) => {
                 let state = ServerState {
                     current_term: self.current_term,
+                    current_leader: self.current_leader,
                     voted_for: self.voted_for,
                     log: self.log.clone(),
                     commit_index: self.commit_index,
@@ -335,16 +372,19 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
     /// Send an AppendEntriesReq to the given peer, and additionally update the timer
     /// so that another (heartbeat) entry is sent soon enough.
     async fn send_append_entries(&mut self, peer: NodeId) -> Fallible<()> {
-        let prev_index = self.next_index[peer] - 1;
-        let prev_term = if prev_index > 1 {
-            self.log.get(prev_index).term
+        let prev_log_index = self.next_index[peer] - 1;
+        let prev_log_term = if prev_log_index > 1 {
+            self.log.get(prev_log_index).term
         } else {
             0
         };
         let message = Message::AppendEntriesReq {
-            prev_index,
-            prev_term,
-            entries: self.log.slice(prev_index as usize + 1..).to_vec(),
+            term: self.current_term,
+            leader: self.node.node_id(),
+            prev_log_index,
+            prev_log_term,
+            entries: self.log.slice(prev_log_index as usize + 1..).to_vec(),
+            leader_commit: self.commit_index,
         };
         self.send_to(peer, &message).await?;
 
