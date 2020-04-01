@@ -1,6 +1,7 @@
 use crate::{Index, Term};
 use failure::{err_msg, Fallible};
 use serde::{Deserialize, Serialize};
+use std::ops::{Bound::*, RangeBounds};
 
 /// A LogEntry is an entry in a RaftLog.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,6 +38,21 @@ impl<I> RaftLog<I> {
     pub fn get(&self, index: Index) -> &LogEntry<I> {
         assert!(index >= 1, "logs have no index 0");
         &self.entries[index as usize - 1]
+    }
+
+    /// Slice the log entries by index
+    pub fn slice<R: RangeBounds<usize>>(&self, range: R) -> &[LogEntry<I>] {
+        let start_vec_index = match range.start_bound() {
+            Included(i) => i - 1,
+            Excluded(i) => *i,
+            Unbounded => 0,
+        };
+        let end_vec_index = match range.end_bound() {
+            Included(i) => *i,
+            Excluded(i) => i - 1,
+            Unbounded => self.entries.len(),
+        };
+        &self.entries[start_vec_index..end_vec_index]
     }
 
     /// Append entries to the log, applying the necessary rules from the Raft protocol and
@@ -101,6 +117,22 @@ mod test {
         log.append_entries(0, 0, vec![LogEntry::new(0, 'a'), LogEntry::new(0, 'b')])?;
         assert_eq!(log.get(1), &LogEntry::new(0, 'a'));
         assert_eq!(log.get(2), &LogEntry::new(0, 'b'));
+        Ok(())
+    }
+
+    #[test]
+    fn slice() -> Fallible<()> {
+        let mut log: RaftLog<Item> = RaftLog::new();
+        let a = LogEntry::new(100, 'a');
+        let b = LogEntry::new(100, 'b');
+        let c = LogEntry::new(100, 'c');
+        let d = LogEntry::new(100, 'd');
+        log.append_entries(0, 0, vec![a.clone(), b.clone(), c.clone(), d.clone()])?;
+        assert_eq!(log.slice(..), &[a.clone(), b.clone(), c.clone(), d.clone()]);
+        assert_eq!(log.slice(1..2), &[a.clone()]);
+        assert_eq!(log.slice(1..=2), &[a.clone(), b.clone()]);
+        assert_eq!(log.slice(..3), &[a.clone(), b.clone()]);
+        assert_eq!(log.slice(3..), &[c.clone(), d.clone()]);
         Ok(())
     }
 

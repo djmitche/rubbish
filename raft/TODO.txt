@@ -1,15 +1,13 @@
 ## Doc
 
 * doc channels
+* doc deviations from paper
+  * AppendEntriesRep contains info implicitly in the context of the RPC (next_index)
 
 ## Misc
 
 * Handle message ser/de somewhere better
 * Parameterize better on item.. (currently char)
-
-## crate::net
-
-* function on node to give network size, current node id
 
 ## crate::net::tcp
 

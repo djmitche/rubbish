@@ -24,8 +24,11 @@ type TcpConfig = Vec<SocketAddr>;
 
 /// A node on a TCP network, implementing RaftNetworkNode.
 pub struct TcpNode {
+    /// Size of this network
+    network_size: usize,
+
     /// This node's ID
-    pub node_id: NodeId,
+    node_id: NodeId,
 
     /// Outoing messages, to any node
     outgoing_tx: mpsc::Sender<(NodeId, Message)>,
@@ -118,7 +121,7 @@ struct TcpPeerInner {
 
 impl TcpNode {
     pub fn new(node_id: NodeId, config: TcpConfig) -> TcpNode {
-        let num_nodes = config.len();
+        let network_size = config.len();
         let (outgoing_tx, outgoing_rx) = mpsc::channel(100);
         let (incoming_tx, incoming_rx) = mpsc::channel(100);
         let (stop_tx, stop_rx) = mpsc::channel(1);
@@ -132,7 +135,7 @@ impl TcpNode {
             peers: vec![],
         };
 
-        for peer_node_id in 0..num_nodes {
+        for peer_node_id in 0..network_size {
             inner.peers.push(TcpPeer::new(
                 node_id,
                 peer_node_id,
@@ -144,6 +147,7 @@ impl TcpNode {
         // start up a task that owns the inner, referenced by the JoinHandle
         // in the node
         TcpNode {
+            network_size,
             node_id,
             outgoing_tx,
             incoming_rx,
@@ -160,6 +164,14 @@ impl TcpNode {
 
 #[async_trait]
 impl RaftNetworkNode for TcpNode {
+    fn network_size(&self) -> usize {
+        self.network_size
+    }
+
+    fn node_id(&self) -> NodeId {
+        self.node_id
+    }
+
     async fn send(&mut self, dest: NodeId, msg: Message) -> Fallible<()> {
         self.outgoing_tx.send((dest, msg)).await?;
         Ok(())
@@ -459,7 +471,7 @@ impl TcpPeerInner {
     }
 
     fn log<S: AsRef<str>>(&self, msg: S) {
-        if cfg!(debug) && DEBUG {
+        if cfg!(test) && DEBUG {
             println!(
                 "node={} peer={} - {}",
                 self.node_id,
