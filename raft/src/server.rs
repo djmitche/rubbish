@@ -94,6 +94,10 @@ enum Control {
     /// Return the current log for debugging
     #[cfg(test)]
     GetState(mpsc::Sender<ServerState>),
+
+    /// Set the current log for debugging
+    #[cfg(test)]
+    SetState(ServerState),
 }
 
 /// A Timer is an event that is scheduled at some future time.
@@ -142,7 +146,7 @@ struct ServerState {
     match_index: Vec<Index>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 enum Message {
     AppendEntriesReq {
@@ -203,6 +207,13 @@ impl RaftServer {
         let (log_tx, mut log_rx) = mpsc::channel(1);
         self.control_tx.send(Control::GetState(log_tx)).await?;
         Ok(log_rx.recv().await.unwrap())
+    }
+
+    /// Set the current server state (for testing)
+    #[cfg(test)]
+    async fn set_state(&mut self, state: ServerState) -> Fallible<()> {
+        self.control_tx.send(Control::SetState(state)).await?;
+        Ok(())
     }
 }
 
@@ -300,6 +311,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     // If the append was successful, then update next_index and match_index accordingly
                     self.next_index[peer] = next_index;
                     self.match_index[peer] = next_index - 1;
+                // TODO: look at term and maybe go back to follower
                 } else {
                     // If the append wasn't successful, select a lower match index for this peer
                     // and try again.  The peer sends the index of the first empty slot in the log,
@@ -374,6 +386,20 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 tx.send(state).await?;
                 Ok(false)
             }
+
+            #[cfg(test)]
+            Control::SetState(state) => {
+                self.mode = state.mode;
+                self.current_term = state.current_term;
+                self.current_leader = state.current_leader;
+                self.voted_for = state.voted_for;
+                self.log = state.log;
+                self.commit_index = state.commit_index;
+                self.last_applied = state.last_applied;
+                self.next_index = state.next_index;
+                self.match_index = state.match_index;
+                Ok(false)
+            }
         }
     }
 
@@ -432,14 +458,340 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::local::make_network;
+    use crate::net::local::{LocalNetwork, LocalNode};
     use tokio::time::delay_for;
 
+    /// Creat a two node network, with a server on node 0 and a bare LocalNode for node 1
+    fn two_node_network() -> (RaftServer, LocalNode) {
+        let mut net = LocalNetwork::new(2);
+        let server = RaftServer::new(net.take(0));
+        let node = net.take(1);
+        (server, node)
+    }
+
+    /// Update the state of the given server
+    async fn update_state(server: &mut RaftServer, modifier: fn(&mut ServerState)) -> Fallible<()> {
+        let mut state = server.get_state().await?;
+        modifier(&mut state);
+        server.set_state(state).await?;
+
+        // since control and messages are on different mpsc channels, sleep a bit to make sure that
+        // the control message arrives first..
+        beat().await;
+
+        Ok(())
+    }
+
+    /// Receive a message on behalf of the given node
+    async fn recv_on_node(node: &mut LocalNode) -> Fallible<(NodeId, Message)> {
+        let (node_id, msg) = node.recv().await?;
+        let message: Message = serde_json::from_slice(&msg[..])?;
+        Ok((node_id, message))
+    }
+
+    /// Send a emssage from the given node to the given node
+    async fn send_from_node(node: &mut LocalNode, peer: NodeId, message: Message) -> Fallible<()> {
+        let msg = serde_json::to_vec(&message)?;
+        node.send(peer, msg).await?;
+        Ok(())
+    }
+
+    /// Wait long enough for all of the mpsc channels to drain..
+    async fn beat() {
+        delay_for(Duration::from_millis(10)).await;
+    }
+
     #[tokio::test]
-    async fn append_entries() -> Fallible<()> {
-        let mut net = make_network(2);
-        let mut leader = RaftServer::new(net.remove(0));
-        let mut follower = RaftServer::new(net.remove(0));
+    async fn test_leader_add() -> Fallible<()> {
+        let (mut leader, mut follower_node) = two_node_network();
+
+        update_state(&mut leader, |state| state.mode = Mode::Leader).await?;
+
+        // make a client call to add an entry
+        leader.add('x').await?;
+
+        // leader should send an AppendEntriesReq message to followers..
+        let (_, message) = recv_on_node(&mut follower_node).await?;
+        assert_eq!(
+            message,
+            Message::AppendEntriesReq {
+                term: 0,
+                leader: 0,
+                prev_log_index: 0,
+                prev_log_term: 0,
+                entries: vec![LogEntry::new(0, 'x')],
+                leader_commit: 0
+            }
+        );
+
+        // ..and update its own state
+        let state = leader.get_state().await?;
+        assert_eq!(state.log.get(1), &LogEntry::new(0, 'x'));
+
+        leader.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_follower_replicate_success() -> Fallible<()> {
+        let (mut follower, mut leader_node) = two_node_network();
+
+        // build a state with some entries already in place
+        update_state(&mut follower, |state| {
+            state.mode = Mode::Follower;
+            state.current_term = 5;
+            let entries = vec![
+                LogEntry::new(1, 'a'),
+                LogEntry::new(3, 'b'), // <-- commit_index
+                LogEntry::new(5, 'c'),
+            ];
+            state.log = RaftLog::new();
+            state.log.append_entries(0, 0, entries).unwrap();
+            state.commit_index = 2;
+        })
+        .await?;
+
+        // simulate an incoming message from the leader
+        send_from_node(
+            &mut leader_node,
+            0,
+            Message::AppendEntriesReq {
+                term: 6,
+                leader: 1,
+                prev_log_index: 3,
+                prev_log_term: 5,
+                entries: vec![LogEntry::new(5, 'x'), LogEntry::new(6, 'y')],
+                leader_commit: 3,
+            },
+        )
+        .await?;
+
+        // ..get the reply
+        let (_, message) = recv_on_node(&mut leader_node).await?;
+        assert_eq!(
+            message,
+            Message::AppendEntriesRep {
+                term: 6,
+                next_index: 6,
+                success: true,
+            }
+        );
+
+        // ..and check the state
+        let state = follower.get_state().await?;
+        //println!("state: {:#?}", state);
+        //println!("state.log.len: {:#?}", state.log.len());
+        assert_eq!(state.log.len(), 5);
+        assert_eq!(state.log.get(4), &LogEntry::new(5, 'x'));
+        assert_eq!(state.log.get(5), &LogEntry::new(6, 'y'));
+        assert_eq!(state.commit_index, 3);
+        assert_eq!(state.current_term, 6);
+        assert_eq!(state.current_leader, Some(1));
+
+        follower.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_follower_replicate_bad_term() -> Fallible<()> {
+        let (mut follower, mut leader_node) = two_node_network();
+
+        // build a state with some entries already in place
+        update_state(&mut follower, |state| {
+            state.mode = Mode::Follower;
+            state.current_term = 5;
+            let entries = vec![LogEntry::new(1, 'a')];
+            state.log = RaftLog::new();
+            state.log.append_entries(0, 0, entries).unwrap();
+            state.commit_index = 2;
+        })
+        .await?;
+
+        // simulate an incoming message from the leader
+        send_from_node(
+            &mut leader_node,
+            0,
+            Message::AppendEntriesReq {
+                term: 3, // too early
+                leader: 1,
+                prev_log_index: 3,
+                prev_log_term: 5,
+                entries: vec![LogEntry::new(5, 'x')],
+                leader_commit: 3,
+            },
+        )
+        .await?;
+
+        // ..get the reply
+        let (_, message) = recv_on_node(&mut leader_node).await?;
+        assert_eq!(
+            message,
+            Message::AppendEntriesRep {
+                term: 5,
+                next_index: 2,
+                success: false,
+            }
+        );
+
+        // ..and check the state hasn't changed
+        let state = follower.get_state().await?;
+        assert_eq!(state.log.len(), 1);
+        assert_eq!(state.commit_index, 2);
+        assert_eq!(state.current_term, 5);
+        assert_eq!(state.current_leader, None);
+
+        follower.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_follower_replicate_log_mismatch() -> Fallible<()> {
+        let (mut follower, mut leader_node) = two_node_network();
+
+        // build a state with some entries already in place
+        update_state(&mut follower, |state| {
+            state.mode = Mode::Follower;
+            state.current_term = 5;
+            let entries = vec![LogEntry::new(1, 'a'), LogEntry::new(4, 'p')];
+            state.log = RaftLog::new();
+            state.log.append_entries(0, 0, entries).unwrap();
+            state.commit_index = 2;
+        })
+        .await?;
+
+        // simulate an incoming message from the leader
+        send_from_node(
+            &mut leader_node,
+            0,
+            Message::AppendEntriesReq {
+                term: 5,
+                leader: 1,
+                prev_log_index: 2,
+                prev_log_term: 5, // does not match (4, p)
+                entries: vec![LogEntry::new(5, 'x')],
+                leader_commit: 3,
+            },
+        )
+        .await?;
+
+        // ..get the reply
+        let (_, message) = recv_on_node(&mut leader_node).await?;
+        assert_eq!(
+            message,
+            Message::AppendEntriesRep {
+                term: 5,
+                next_index: 3,
+                success: false,
+            }
+        );
+
+        // ..and check the state hasn't changed
+        let state = follower.get_state().await?;
+        assert_eq!(state.log.len(), 2);
+        assert_eq!(state.commit_index, 2);
+        assert_eq!(state.current_term, 5);
+        assert_eq!(state.current_leader, None);
+
+        follower.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_leader_apply_entries_rep_success() -> Fallible<()> {
+        let (mut leader, mut follower_node) = two_node_network();
+
+        update_state(&mut leader, |state| state.mode = Mode::Leader).await?;
+
+        // simulate an incoming message from the follower
+        send_from_node(
+            &mut follower_node,
+            0,
+            Message::AppendEntriesRep {
+                term: 5,
+                next_index: 3,
+                success: true,
+            },
+        )
+        .await?;
+
+        beat().await;
+
+        // and see that it updates it state
+        let state = leader.get_state().await?;
+        // TODO: assert_eq!(state.current_term, 5); // copied from follower
+        assert_eq!(state.next_index[1], 3);
+        assert_eq!(state.match_index[1], 2);
+
+        leader.stop().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_leader_apply_entries_rep_failure() -> Fallible<()> {
+        let (mut leader, mut follower_node) = two_node_network();
+
+        update_state(&mut leader, |state| {
+            state.mode = Mode::Leader;
+            let entries = vec![
+                LogEntry::new(1, 'a'),
+                LogEntry::new(3, 'b'),
+                LogEntry::new(5, 'c'),
+                LogEntry::new(5, 'd'),
+                LogEntry::new(5, 'e'),
+            ];
+            state.log = RaftLog::new();
+            state.log.append_entries(0, 0, entries).unwrap();
+            state.match_index[1] = 1;
+            state.next_index[1] = 5;
+        })
+        .await?;
+
+        // simulate an incoming message from the follower
+        send_from_node(
+            &mut follower_node,
+            0,
+            Message::AppendEntriesRep {
+                term: 5,
+                next_index: 3,
+                success: false,
+            },
+        )
+        .await?;
+
+        // leader should send an AppendEntriesReq message to followers..
+        let (_, message) = recv_on_node(&mut follower_node).await?;
+        assert_eq!(
+            message,
+            Message::AppendEntriesReq {
+                term: 0,
+                leader: 0,
+                prev_log_index: 2,
+                prev_log_term: 3,
+                entries: vec![
+                    LogEntry::new(5, 'c'),
+                    LogEntry::new(5, 'd'),
+                    LogEntry::new(5, 'e'),
+                ],
+                leader_commit: 0
+            }
+        );
+
+        // and see that it updates it state
+        let state = leader.get_state().await?;
+        // TODO: assert_eq!(state.current_term, 5); // copied from follower
+        assert_eq!(state.next_index[1], 3);
+        assert_eq!(state.match_index[1], 1);
+
+        leader.stop().await;
+        Ok(())
+    }
+
+    /*
+    #[tokio::test] TODO once we have client responses..
+    async fn replicate_client_call() -> Fallible<()> {
+        let mut net = LocalNetwork::new(2);
+        let mut leader = RaftServer::new(net.take(0));
+        let mut follower = RaftServer::new(net.take(1));
 
         leader.add('x').await?;
         leader.add('y').await?;
@@ -458,4 +810,5 @@ mod test {
         follower.stop().await;
         Ok(())
     }
+    */
 }

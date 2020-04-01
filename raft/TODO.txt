@@ -13,6 +13,7 @@
 
 * Be smarter about heartbeat timings (use randomization)
 * Better testing framework - some way to exercise a particular function
+* don't replicate all that serverstate nonsense - just use a sub-struct
 
 ## crate::net::tcp
 
