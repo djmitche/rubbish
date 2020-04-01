@@ -4,15 +4,20 @@ use crate::{Index, Term};
 use failure::Fallible;
 use serde::{Deserialize, Serialize};
 use std::cmp;
+use std::iter;
+use std::time::Duration;
+use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task;
+use tokio::time::{delay_queue, DelayQueue};
 
 /// Set this to true to enable lots of println!
 const DEBUG: bool = true;
 
-/// A RaftServer represents a running server participating in a Raft.
-///
+/// Max time between AppendEntries calls
+const HEARTBEAT: Duration = Duration::from_millis(100);
 
+/// A RaftServer represents a running server participating in a Raft.
 #[derive(Debug)]
 pub struct RaftServer {
     /// The background task receiving messages for this server
@@ -32,14 +37,26 @@ pub struct RaftServer {
 #[derive(Debug)]
 pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     /// True if this server is the lader
-    leader: bool,
+    leader: bool, // XXX temp
 
+    /*
+     * Mechanics
+     */
     /// The network node, used for communication
     node: N,
 
     /// Channel indicating the task should stop
     control_rx: mpsc::Receiver<Control>,
 
+    /// A queue of Timer objects
+    timers: DelayQueue<Timer>,
+
+    /// DelayQueue keys for the last time AppendEntries was sent to this peer
+    last_append_entries: Vec<Option<delay_queue::Key>>,
+
+    /*
+     * Algorithm State
+     */
     /// "latest term the server has seen"
     current_term: Term,
 
@@ -74,6 +91,12 @@ enum Control {
     /// Return the current log for debugging
     #[cfg(test)]
     GetState(mpsc::Sender<ServerState>),
+}
+
+#[derive(Debug)]
+enum Timer {
+    /// This follower may not have gotten an AppendEntriesReq in a while
+    FollowerUpdate(NodeId),
 }
 
 /// State of the server, used for debugging with get_state
@@ -124,6 +147,8 @@ impl RaftServer {
         let inner = RaftServerInner {
             leader,
             node,
+            timers: DelayQueue::new(),
+            last_append_entries: iter::repeat_with(|| None).take(network_size).collect(),
             control_rx,
             current_term: 0,
             voted_for: None,
@@ -173,11 +198,16 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                         }
                     }
                 },
+
                 r = self.node.recv() => {
                     match r {
                         Ok((peer, msg)) => self.handle_message(peer, msg).await.unwrap(),
                         Err(e) => panic!("Error receiving from net: {}", e),
                     }
+                },
+
+                Some(t) = self.timers.next() => {
+                    self.handle_timer(t.unwrap().into_inner()).await.unwrap();
                 }
             }
         }
@@ -185,13 +215,14 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
     async fn handle_message(&mut self, peer: NodeId, msg: Vec<u8>) -> Fallible<()> {
         let message: Message = serde_json::from_slice(&msg[..])?;
-        self.log(format!("Handling message {:?} from {}", message, peer));
+        self.log(format!("Handling Message {:?} from {}", message, peer));
         match message {
             Message::AppendEntriesReq {
                 prev_index,
                 prev_term,
                 entries,
             } => {
+                // TODO: check term
                 let success = match self.log.append_entries(prev_index, prev_term, entries) {
                     Ok(()) => true,
                     Err(_) => false,
@@ -208,6 +239,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
                 Ok(())
             }
+
             Message::AppendEntriesRep {
                 term,
                 success,
@@ -232,6 +264,18 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 Ok(())
             }
         }
+    }
+
+    async fn handle_timer(&mut self, t: Timer) -> Fallible<()> {
+        self.log(format!("Handling Timer {:?}", t));
+        match t {
+            Timer::FollowerUpdate(node_id) => {
+                // remove the fired timer from last_append_entries, or DelayQueue will panic
+                self.last_append_entries[node_id] = None;
+                self.send_append_entries(node_id).await?;
+            }
+        };
+        Ok(())
     }
 
     /// Handle a control message from the main process, and return true if the task should exit
@@ -288,6 +332,8 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         Ok(())
     }
 
+    /// Send an AppendEntriesReq to the given peer, and additionally update the timer
+    /// so that another (heartbeat) entry is sent soon enough.
     async fn send_append_entries(&mut self, peer: NodeId) -> Fallible<()> {
         let prev_index = self.next_index[peer] - 1;
         let prev_term = if prev_index > 1 {
@@ -301,6 +347,17 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             entries: self.log.slice(prev_index as usize + 1..).to_vec(),
         };
         self.send_to(peer, &message).await?;
+
+        // queue another AppendEntries well before the heartbeat expires
+        if let Some(delay_key) = self.last_append_entries[peer].take() {
+            self.timers.remove(&delay_key);
+        }
+        self.last_append_entries[peer] = Some(
+            self.timers
+                // TODO: something smarter than half the heartbeat..
+                .insert(Timer::FollowerUpdate(peer), HEARTBEAT / 2),
+        );
+
         Ok(())
     }
 
@@ -320,6 +377,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 mod test {
     use super::*;
     use crate::net::local::make_network;
+    use tokio::time::delay_for;
 
     #[tokio::test]
     async fn append_entries() -> Fallible<()> {
@@ -337,6 +395,8 @@ mod test {
         let state = follower.get_state().await?;
         assert_eq!(state.log.get(1), &LogEntry::new(0, 'x'));
         assert_eq!(state.log.get(2), &LogEntry::new(0, 'y'));
+
+        delay_for(Duration::from_secs(1)).await;
 
         leader.stop().await;
         follower.stop().await;

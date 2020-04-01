@@ -8,6 +8,11 @@
 * Handle message ser/de somewhere better
 * Parameterize better on item.. (currently char)
 
+## Server
+
+* Be smarter about heartbeat timings (use randomization)
+* Better testing framework - some way to exercise a particular function
+
 ## crate::net::tcp
 
 * Expire outgoing messages if not sent in 500 ms or whatever
