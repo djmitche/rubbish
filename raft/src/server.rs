@@ -17,6 +17,10 @@ const DEBUG: bool = true;
 /// Max time between AppendEntries calls
 const HEARTBEAT: Duration = Duration::from_millis(100);
 
+/// Time after which a new election should be called; this should be at least
+/// twice HEARTBEAT.
+const ELECTION_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// A RaftServer represents a running server participating in a Raft.
 #[derive(Debug)]
 pub struct RaftServer {
@@ -49,7 +53,10 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     timers: DelayQueue<Timer>,
 
     /// DelayQueue keys for the last time AppendEntries was sent to this peer
-    last_append_entries: Vec<Option<delay_queue::Key>>,
+    heartbeat_delay: Vec<Option<delay_queue::Key>>,
+
+    /// Timeout related to elections; when this goes off, start a new election.
+    election_timeout: Option<delay_queue::Key>,
 
     /*
      * Algorithm State
@@ -105,6 +112,9 @@ enum Control {
 enum Timer {
     /// This follower may not have gotten an AppendEntriesReq in a while
     FollowerUpdate(NodeId),
+
+    /// We should start an election
+    CallElection,
 }
 
 /// The current mode of the server
@@ -162,6 +172,16 @@ enum Message {
         next_index: Index,
         success: bool,
     },
+    RequestVoteReq {
+        term: Term,
+        candidate_id: NodeId,
+        last_log_index: Index,
+        last_log_term: Term,
+    },
+    RequestVoteRep {
+        term: Term,
+        vote_granted: bool,
+    },
 }
 
 impl RaftServer {
@@ -171,7 +191,8 @@ impl RaftServer {
         let inner = RaftServerInner {
             node,
             timers: DelayQueue::new(),
-            last_append_entries: iter::repeat_with(|| None).take(network_size).collect(),
+            heartbeat_delay: iter::repeat_with(|| None).take(network_size).collect(),
+            election_timeout: None,
             control_rx,
             mode: Mode::Follower,
             current_term: 0,
@@ -257,6 +278,17 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 entries,
                 leader_commit,
             } => {
+                if self.mode == Mode::Leader {
+                    // leaders don't respond to this message
+                    return Ok(());
+                }
+
+                // If we're a follower, then reset the election timeout, as we have just
+                // heard from a real, live leader
+                if self.mode == Mode::Follower {
+                    self.start_election_timeout();
+                }
+
                 // Reject this request if term < our current_term
                 let mut success = term >= self.current_term;
 
@@ -273,6 +305,12 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
                 // If the update was successful, so do some bookkeeping:
                 if success {
+                    // TODO: test
+                    if self.mode == Mode::Candidate {
+                        // we lost the elction, so transition back to a follower
+                        self.change_mode(Mode::Follower).await?;
+                    }
+
                     // Update our commit index based on what the leader has told us, but
                     // not beyond the entries we have received.
                     if leader_commit > self.commit_index {
@@ -303,7 +341,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 next_index,
             } => {
                 if self.mode != Mode::Leader {
-                    // don't care anymore..
+                    // if we're no longer a leader, there's nothing to do with this response
                     return Ok(());
                 }
 
@@ -311,28 +349,102 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     // If the append was successful, then update next_index and match_index accordingly
                     self.next_index[peer] = next_index;
                     self.match_index[peer] = next_index - 1;
-                // TODO: look at term and maybe go back to follower
                 } else {
-                    // If the append wasn't successful, select a lower match index for this peer
-                    // and try again.  The peer sends the index of the first empty slot in the log,
-                    // but we may need to go back further than that, so decrease next_index by at
-                    // least one, but stop at 1.
-                    self.next_index[peer] =
-                        cmp::max(1, cmp::min(self.next_index[peer] - 1, next_index));
-                    self.send_append_entries(peer).await?;
+                    if term > self.current_term {
+                        // If the append wasn't successful because another leader has been elected,
+                        // then transition back to follower state (but don't update current_term
+                        // yet - that will happen when we get an AppendEntries as a follower)
+                        // TODO: test
+                        self.change_mode(Mode::Follower).await?;
+                    } else {
+                        // If the append wasn't successful because of a log conflict, select a lower match index for this peer
+                        // and try again.  The peer sends the index of the first empty slot in the log,
+                        // but we may need to go back further than that, so decrease next_index by at
+                        // least one, but stop at 1.
+                        self.next_index[peer] =
+                            cmp::max(1, cmp::min(self.next_index[peer] - 1, next_index));
+                        self.send_append_entries(peer).await?;
+                    }
                 }
                 Ok(())
             }
+
+            Message::RequestVoteReq {
+                term,
+                candidate_id,
+                last_log_index,
+                last_log_term,
+            } => {
+                let mut vote_granted = true;
+                // "Reply false if term < currentTerm"
+                if term < self.current_term {
+                    vote_granted = false;
+                }
+
+                // "If votedFor is null or canidateId .."
+                if vote_granted {
+                    if let Some(node_id) = self.voted_for {
+                        if candidate_id != node_id {
+                            vote_granted = false;
+                        }
+                    }
+                }
+
+                // ".. and candidates's log is at least as up-to-date as receiver's log"
+                // §5.4.1: "Raft determines which of two logs is more up-to-date by comparing
+                // the index and term of the last entries in the logs.  If the logs have last
+                // entries with differen terms, then the log with the later term is more
+                // up-to-date.  If the logs end with the same term, then whichever log is longer is
+                // more up-to-date."
+                if vote_granted {
+                    // TODO: might not have any entries
+                    let receiver_last_log_index = self.log.len() as Index;
+                    let receiver_last_log_term = self.log.get(receiver_last_log_index).term;
+                    if last_log_term < receiver_last_log_term {
+                        vote_granted = false;
+                    } else if last_log_term == receiver_last_log_term {
+                        if last_log_index < receiver_last_log_index {
+                            vote_granted = false;
+                        }
+                    }
+                }
+
+                self.send_to(
+                    candidate_id,
+                    &Message::RequestVoteRep {
+                        term: self.current_term,
+                        vote_granted,
+                    },
+                )
+                .await?;
+                Ok(())
+            }
+            // TODO: XXX HERE
+            // Need to track number of votes for us in a state variable
+            Message::RequestVoteRep { term, vote_granted } => Ok(()),
         }
     }
 
     async fn handle_timer(&mut self, t: Timer) -> Fallible<()> {
         self.log(format!("Handling Timer {:?}", t));
+        // NOTE: self.timers.remove will panic if called with a key that has already fired.  So
+        // we are careful to delete the key before handling any of these timers.
         match t {
             Timer::FollowerUpdate(node_id) => {
-                // remove the fired timer from last_append_entries, or DelayQueue will panic
-                self.last_append_entries[node_id] = None;
+                self.heartbeat_delay[node_id] = None;
                 self.send_append_entries(node_id).await?;
+            }
+            Timer::CallElection => {
+                self.election_timeout = None;
+                match self.mode {
+                    Mode::Follower => {
+                        self.change_mode(Mode::Candidate).await?;
+                    }
+                    Mode::Candidate => {
+                        self.start_election().await?;
+                    }
+                    Mode::Leader => unreachable!(),
+                }
             }
         };
         Ok(())
@@ -403,8 +515,97 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         }
     }
 
+    async fn change_mode(&mut self, new_mode: Mode) -> Fallible<()> {
+        self.log(format!("Transitioning to mode {:?}", new_mode));
+
+        let old_mode = self.mode;
+        assert!(old_mode != new_mode);
+        self.mode = new_mode;
+
+        // shut down anything running for the old mode..
+        match old_mode {
+            Mode::Follower => {
+                self.stop_election_timeout();
+            }
+            Mode::Candidate => {
+                self.stop_election_timeout();
+            }
+            Mode::Leader => {
+                for delay in &mut self.heartbeat_delay.iter_mut() {
+                    if let Some(k) = delay.take() {
+                        self.timers.remove(&k);
+                    }
+                }
+            }
+        };
+
+        // .. and set up for the new mode
+        match new_mode {
+            Mode::Follower => {
+                self.start_election_timeout();
+            }
+            Mode::Candidate => {
+                self.start_election().await?;
+            }
+            Mode::Leader => {
+                self.current_leader = Some(self.node.node_id());
+
+                // re-initialize state tracking other nodes' logs
+                for peer in 0..self.node.network_size() {
+                    self.next_index[peer] = self.log.len() as Index + 1;
+                    self.match_index[peer] = 0;
+                }
+
+                // assert leadership by sending AppendEntriesReq to everyone
+                for peer in 0..self.node.network_size() {
+                    self.send_append_entries(peer).await?;
+                }
+            }
+        };
+
+        Ok(())
+    }
+
+    /// Start a new election, including incrementing term, sending the necessary mesages, and
+    /// starting the election timer.
+    async fn start_election(&mut self) -> Fallible<()> {
+        assert!(self.mode == Mode::Candidate);
+
+        let node_id = self.node.node_id();
+        self.current_term += 1;
+        self.voted_for = Some(node_id);
+
+        let message = Message::RequestVoteReq {
+            term: self.current_term,
+            candidate_id: node_id,
+            // TODO: might have no log entries - do this in a function?
+            last_log_index: self.log.len() as Index,
+            last_log_term: self.log.get(self.log.len() as Index).term,
+        };
+        for peer in 0..self.node.network_size() {
+            self.send_to(peer, &message).await?;
+        }
+
+        self.start_election_timeout();
+
+        Ok(())
+    }
+
     // utility functions
 
+    /// Stop the election timeout
+    fn stop_election_timeout(&mut self) {
+        if let Some(k) = self.election_timeout.take() {
+            self.timers.remove(&k);
+        }
+    }
+
+    /// (Re-)start the election_timeout, first removing any existing timeout
+    fn start_election_timeout(&mut self) {
+        self.election_timeout = Some(self.timers.insert(Timer::CallElection, ELECTION_TIMEOUT));
+    }
+
+    /// Send a message to a peer
     async fn send_to(&mut self, peer: NodeId, message: &Message) -> Fallible<()> {
         let msg = serde_json::to_vec(message)?;
         self.node.send(peer, msg).await?;
@@ -431,14 +632,11 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         self.send_to(peer, &message).await?;
 
         // queue another AppendEntries well before the heartbeat expires
-        if let Some(delay_key) = self.last_append_entries[peer].take() {
+        if let Some(delay_key) = self.heartbeat_delay[peer].take() {
             self.timers.remove(&delay_key);
         }
-        self.last_append_entries[peer] = Some(
-            self.timers
-                // TODO: something smarter than half the heartbeat..
-                .insert(Timer::FollowerUpdate(peer), HEARTBEAT / 2),
-        );
+        self.heartbeat_delay[peer] =
+            Some(self.timers.insert(Timer::FollowerUpdate(peer), HEARTBEAT));
 
         Ok(())
     }
@@ -741,12 +939,14 @@ mod test {
             ];
             state.log = RaftLog::new();
             state.log.append_entries(0, 0, entries).unwrap();
+            state.current_term = 5;
             state.match_index[1] = 1;
             state.next_index[1] = 5;
         })
         .await?;
 
-        // simulate an incoming message from the follower
+        // simulate an incoming message from the follower indicating that
+        // it needs more log entries
         send_from_node(
             &mut follower_node,
             0,
@@ -763,7 +963,7 @@ mod test {
         assert_eq!(
             message,
             Message::AppendEntriesReq {
-                term: 0,
+                term: 5,
                 leader: 0,
                 prev_log_index: 2,
                 prev_log_term: 3,
@@ -778,7 +978,7 @@ mod test {
 
         // and see that it updates it state
         let state = leader.get_state().await?;
-        // TODO: assert_eq!(state.current_term, 5); // copied from follower
+        assert_eq!(state.current_term, 5);
         assert_eq!(state.next_index[1], 3);
         assert_eq!(state.match_index[1], 1);
 

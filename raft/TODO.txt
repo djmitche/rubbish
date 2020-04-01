@@ -12,8 +12,14 @@
 ## Server
 
 * Be smarter about heartbeat timings (use randomization)
-* Better testing framework - some way to exercise a particular function
-* don't replicate all that serverstate nonsense - just use a sub-struct
+* don't replicate all that ServerState nonsense - just use a sub-struct
+* utility function for getting last index / term, with defaults for 0
+* consider building a big state machine:
+  - method per event (message, control, timer)
+  - ServerState as input
+  - ServerState + action (messages to send, timers to set/clear) as output
+  - *way* more testable
+  - could encapsulate with a trait allowing mock actions
 
 ## crate::net::tcp
 
