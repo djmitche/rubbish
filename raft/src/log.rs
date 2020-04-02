@@ -5,7 +5,7 @@ use std::ops::{Bound::*, RangeBounds};
 
 /// A LogEntry is an entry in a RaftLog.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LogEntry<I> {
+pub struct LogEntry<I: Clone> {
     pub term: Term,
     pub item: I,
 }
@@ -13,17 +13,17 @@ pub struct LogEntry<I> {
 /// A RaftLog represents the central data structure in raft, and enforces correct access to that
 /// log.  Note that indexes are 1-based!
 #[derive(Clone, Debug, PartialEq)]
-pub struct RaftLog<I> {
+pub struct RaftLog<I: Clone> {
     entries: Vec<LogEntry<I>>,
 }
 
-impl<I> LogEntry<I> {
+impl<I: Clone> LogEntry<I> {
     pub fn new(term: Term, item: I) -> LogEntry<I> {
         LogEntry { term, item }
     }
 }
 
-impl<I> RaftLog<I> {
+impl<I: Clone> RaftLog<I> {
     /// Create an empty log
     pub fn new() -> RaftLog<I> {
         RaftLog { entries: vec![] }
@@ -32,6 +32,21 @@ impl<I> RaftLog<I> {
     /// Get the number of entries
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Get the index of the last entry in the log
+    pub fn last_index(&self) -> Option<Index> {
+        let len = self.entries.len();
+        if len > 0 {
+            Some(len as Index)
+        } else {
+            None
+        }
+    }
+
+    /// Get the index of the next entry to be added to the log
+    pub fn next_index(&self) -> Index {
+        self.entries.len() as Index + 1
     }
 
     /// Get an entry by its index
@@ -63,12 +78,13 @@ impl<I> RaftLog<I> {
 
     /// Append entries to the log, applying the necessary rules from the Raft protocol and
     /// returning false if those fail
-    pub fn append_entries(
+    pub fn append_entries<E: AsRef<[LogEntry<I>]>>(
         &mut self,
         prev_index: Index,
         prev_term: Term,
-        entries: Vec<LogEntry<I>>,
+        entries: E,
     ) -> Fallible<()> {
+        let entries = entries.as_ref();
         let len = self.len();
 
         // Rule 1: no gaps in the log indexes
@@ -91,7 +107,11 @@ impl<I> RaftLog<I> {
         }
 
         // insert the entries, replacing any at the given index and above
-        self.entries.splice((prev_index as usize).., entries);
+        self.entries.truncate(prev_index as usize);
+        self.entries.reserve(prev_index as usize + entries.len());
+        for entry in entries.iter() {
+            self.entries.push((*entry).clone());
+        }
 
         Ok(())
     }
@@ -110,17 +130,49 @@ mod test {
     }
 
     #[test]
+    fn last_index_zero() {
+        let log: RaftLog<Item> = RaftLog::new();
+        assert_eq!(log.last_index(), None);
+    }
+
+    #[test]
+    fn next_index_zero() {
+        let log: RaftLog<Item> = RaftLog::new();
+        assert_eq!(log.next_index(), 1);
+    }
+
+    #[test]
     fn len_nonzero() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(0, 'a'), LogEntry::new(0, 'b')])?;
+        log.add(LogEntry::new(0, 'a'));
+        log.add(LogEntry::new(0, 'b'));
         assert_eq!(log.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn last_index_nonzero() -> Fallible<()> {
+        let mut log: RaftLog<Item> = RaftLog::new();
+        log.add(LogEntry::new(0, 'a'));
+        log.add(LogEntry::new(0, 'b'));
+        assert_eq!(log.last_index(), Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn net_index_nonzero() -> Fallible<()> {
+        let mut log: RaftLog<Item> = RaftLog::new();
+        log.add(LogEntry::new(0, 'a'));
+        log.add(LogEntry::new(0, 'b'));
+        assert_eq!(log.next_index(), 3);
         Ok(())
     }
 
     #[test]
     fn get() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, vec![LogEntry::new(0, 'a'), LogEntry::new(0, 'b')])?;
+        log.add(LogEntry::new(0, 'a'));
+        log.add(LogEntry::new(0, 'b'));
         assert_eq!(log.get(1), &LogEntry::new(0, 'a'));
         assert_eq!(log.get(2), &LogEntry::new(0, 'b'));
         Ok(())
@@ -130,10 +182,13 @@ mod test {
     fn slice() -> Fallible<()> {
         let mut log: RaftLog<Item> = RaftLog::new();
         let a = LogEntry::new(100, 'a');
+        log.add(a.clone());
         let b = LogEntry::new(100, 'b');
+        log.add(b.clone());
         let c = LogEntry::new(100, 'c');
+        log.add(c.clone());
         let d = LogEntry::new(100, 'd');
-        log.append_entries(0, 0, vec![a.clone(), b.clone(), c.clone(), d.clone()])?;
+        log.add(d.clone());
         assert_eq!(log.slice(..), &[a.clone(), b.clone(), c.clone(), d.clone()]);
         assert_eq!(log.slice(1..2), &[a.clone()]);
         assert_eq!(log.slice(1..=2), &[a.clone(), b.clone()]);
@@ -219,8 +274,15 @@ mod test {
 
     fn case(terms: Vec<Term>) -> RaftLog<Item> {
         let mut log: RaftLog<Item> = RaftLog::new();
-        log.append_entries(0, 0, terms.iter().map(|t| LogEntry::new(*t, 'x')).collect())
-            .unwrap();
+        log.append_entries(
+            0,
+            0,
+            terms
+                .iter()
+                .map(|t| LogEntry::new(*t, 'x'))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         log
     }
 

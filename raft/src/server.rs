@@ -534,7 +534,7 @@ fn handle_control_add(state: &mut RaftState, actions: &mut Actions, item: char) 
         return;
     }
     let entry = LogEntry::new(state.current_term, item);
-    let (prev_log_index, prev_log_term) = prev_log_info(state, state.log.len() as Index + 1);
+    let (prev_log_index, prev_log_term) = prev_log_info(state, state.log.next_index());
 
     // append one entry locally (this will always succeed)
     state
@@ -576,8 +576,7 @@ fn handle_append_entries_req(
         success = match state.log.append_entries(
             message.prev_log_index,
             message.prev_log_term,
-            // TODO: take ref?
-            message.entries.clone(),
+            &message.entries[..],
         ) {
             Ok(()) => true,
             Err(e) => {
@@ -597,7 +596,8 @@ fn handle_append_entries_req(
         // Update our commit index based on what the leader has told us, but
         // not beyond the entries we have received.
         if message.leader_commit > state.commit_index {
-            state.commit_index = cmp::min(message.leader_commit, state.log.len() as Index);
+            state.commit_index =
+                cmp::min(message.leader_commit, state.log.last_index().unwrap_or(0));
         }
 
         // Update our current term if this is from a newer leader
@@ -610,7 +610,7 @@ fn handle_append_entries_req(
         Message::AppendEntriesRep(AppendEntriesRep {
             term: state.current_term,
             success,
-            next_index: state.log.len() as Index + 1,
+            next_index: state.log.next_index(),
         }),
     )
 }
@@ -680,7 +680,7 @@ fn handle_request_vote_req(
     // up-to-date.  If the logs end with the same term, then whichever log is longer is
     // more up-to-date."
     if vote_granted {
-        let (last_log_index, last_log_term) = prev_log_info(state, state.log.len() as Index + 1);
+        let (last_log_index, last_log_term) = prev_log_info(state, state.log.next_index());
         if message.last_log_term < last_log_term {
             vote_granted = false;
         } else if message.last_log_term == last_log_term {
@@ -820,7 +820,7 @@ fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
 
             // re-initialize state tracking other nodes' logs
             for peer in 0..state.network_size {
-                state.next_index[peer] = state.log.len() as Index + 1;
+                state.next_index[peer] = state.log.next_index();
                 state.match_index[peer] = 0;
             }
 
@@ -843,7 +843,7 @@ fn start_election(state: &mut RaftState, actions: &mut Actions) {
     state.voters[state.node_id] = true;
     state.voted_for = Some(state.node_id);
 
-    let (last_log_index, last_log_term) = prev_log_info(state, state.log.len() as Index + 1);
+    let (last_log_index, last_log_term) = prev_log_info(state, state.log.next_index());
 
     for peer in 0..state.network_size {
         let message = Message::RequestVoteReq(RequestVoteReq {
