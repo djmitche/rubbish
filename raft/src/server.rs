@@ -656,8 +656,6 @@ fn handle_request_vote_req(
     // TODO: test
     let mut vote_granted = true;
 
-    // TODO: transition to follower if term > current_term (helper function)
-
     // "Reply false if term < currentTerm"
     if message.term < state.current_term {
         vote_granted = false;
@@ -692,7 +690,7 @@ fn handle_request_vote_req(
     actions.send_to(
         peer,
         Message::RequestVoteRep(RequestVoteRep {
-            term: message.term, // TODO: should this inc its own currentTerm?
+            term: message.term,
             vote_granted,
         }),
     );
@@ -711,8 +709,9 @@ fn handle_request_vote_rep(
         // thank you for your vote .. but I'm not running!
         return;
     }
-    // TODO: transition to follower..
-    if message.term != state.current_term {
+
+    if message.term < state.current_term {
+        // message was for an old term
         return;
     }
 
