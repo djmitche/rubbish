@@ -12,7 +12,6 @@
 ## Server
 
 * Be smarter about heartbeat timings (use randomization)
-* utility function for getting last index / term, with defaults for 0
 
 ## crate::net::tcp
 

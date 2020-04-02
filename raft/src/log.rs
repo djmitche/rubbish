@@ -55,6 +55,12 @@ impl<I> RaftLog<I> {
         &self.entries[start_vec_index..end_vec_index]
     }
 
+    /// Add entry (used in testing)
+    #[cfg(test)]
+    pub fn add(&mut self, entry: LogEntry<I>) {
+        self.entries.push(entry);
+    }
+
     /// Append entries to the log, applying the necessary rules from the Raft protocol and
     /// returning false if those fail
     pub fn append_entries(

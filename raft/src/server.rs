@@ -29,6 +29,10 @@ pub struct RaftServer {
 
     /// A channel to send control messages to the background task
     control_tx: mpsc::Sender<Control>,
+
+    /// A channel for getting state when requested (Control::GetState)
+    #[cfg(test)]
+    state_rx: mpsc::Receiver<RaftState>,
 }
 
 /* Most of the work of a server occurs in a background task, reacting to messages and timers.  In
@@ -45,8 +49,16 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     /// The network node, used for communication
     node: N,
 
-    /// Channel indicating the task should stop
+    /// Channel containing control messages from other tasks
     control_rx: mpsc::Receiver<Control>,
+
+    /// A channel for transmitting state when requested (Control::GetState)
+    #[cfg(test)]
+    state_tx: mpsc::Sender<RaftState>,
+
+    /// True if another task is waiting for state on state_tx
+    #[cfg(test)]
+    want_state: bool,
 
     /// A queue of Timer objects
     timers: DelayQueue<Timer>,
@@ -75,7 +87,7 @@ enum Control {
 
     /// Return the current log for debugging
     #[cfg(test)]
-    GetState(mpsc::Sender<RaftState>),
+    GetState,
 
     /// Set the current log for debugging
     #[cfg(test)]
@@ -140,7 +152,7 @@ struct RaftState {
     match_index: Vec<Index>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 struct AppendEntriesReq {
     term: Term,
     leader: NodeId,
@@ -150,14 +162,14 @@ struct AppendEntriesReq {
     leader_commit: Index,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 struct AppendEntriesRep {
     term: Term,
     next_index: Index,
     success: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 struct RequestVoteReq {
     term: Term,
     candidate_id: NodeId,
@@ -165,7 +177,7 @@ struct RequestVoteReq {
     last_log_term: Term,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
 struct RequestVoteRep {
     term: Term,
     vote_granted: bool,
@@ -186,12 +198,18 @@ impl RaftServer {
         let (control_tx, control_rx) = mpsc::channel(1);
         let node_id = node.node_id();
         let network_size = node.network_size();
+        let (state_tx, state_rx): (mpsc::Sender<RaftState>, mpsc::Receiver<RaftState>) =
+            mpsc::channel(1);
         let inner = RaftServerInner {
             node,
             timers: DelayQueue::new(),
             heartbeat_delay: iter::repeat_with(|| None).take(network_size).collect(),
             election_timeout: None,
             control_rx,
+            #[cfg(test)]
+            state_tx,
+            #[cfg(test)]
+            want_state: false,
             state: RaftState {
                 node_id,
                 network_size,
@@ -212,6 +230,8 @@ impl RaftServer {
         RaftServer {
             task: tokio::spawn(async move { inner.run().await }),
             control_tx,
+            #[cfg(test)]
+            state_rx,
         }
     }
 
@@ -229,9 +249,8 @@ impl RaftServer {
     /// Get a copy of the current server state (for testing)
     #[cfg(test)]
     async fn get_state(&mut self) -> Fallible<RaftState> {
-        let (log_tx, mut log_rx) = mpsc::channel(1);
-        self.control_tx.send(Control::GetState(log_tx)).await?;
-        Ok(log_rx.recv().await.unwrap())
+        self.control_tx.send(Control::GetState).await?;
+        Ok(self.state_rx.recv().await.unwrap())
     }
 
     /// Set the current server state (for testing)
@@ -262,7 +281,17 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 Some(t) = self.timers.next() => self.handle_timer(t.unwrap().into_inner()),
             }
 
+            // execute any actions accumulated in this loop
             self.execute_actions().await.unwrap();
+
+            // respond with the final state, if requested via the control channel
+            #[cfg(test)]
+            {
+                if self.want_state {
+                    self.want_state = false;
+                    self.state_tx.send(self.state.clone()).await.unwrap();
+                }
+            }
         }
     }
 
@@ -297,8 +326,8 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
     fn handle_timer(&mut self, t: Timer) {
         self.actions.log(format!("Handling Timer {:?}", t));
 
-        // NOTE: self.timers.remove will panic if called with a key that has already fired.  So
-        // we are careful to delete the key before handling any of these timers.
+        // self.timers.remove will panic if called with a key that has already fired, so we are
+        // careful to delete the key before handling any of these timers.
         match t {
             Timer::Heartbeat(node_id) => {
                 self.heartbeat_delay[node_id] = None;
@@ -323,7 +352,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             Control::Add(item) => handle_control_add(&mut self.state, &mut self.actions, item),
 
             #[cfg(test)]
-            Control::GetState(tx) => self.actions.send_state(tx),
+            Control::GetState => self.want_state = true,
 
             #[cfg(test)]
             Control::SetState(state) => self.state = state,
@@ -364,10 +393,6 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     let msg = serde_json::to_vec(&message)?;
                     self.node.send(peer, msg).await?;
                 }
-                #[cfg(test)]
-                Action::SendState(mut tx) => {
-                    tx.send(self.state.clone()).await?;
-                }
             };
         }
         Ok(())
@@ -383,6 +408,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 ///
 /// The struct provides convenience functions to add an action; the RaftServerInner's
 /// execute_actions method then actually performs the actions.
+#[derive(Debug, PartialEq)]
 struct Actions {
     actions: Vec<Action>,
     #[cfg(test)]
@@ -390,6 +416,7 @@ struct Actions {
 }
 
 /// See Actions
+#[derive(Debug, PartialEq)]
 enum Action {
     /// Start the election_timeout timer (resetting any existing timer)
     SetElectionTimer,
@@ -405,10 +432,6 @@ enum Action {
 
     /// Send a message to a peer
     SendTo(NodeId, Message),
-
-    /// Send current state via a channel
-    #[cfg(test)]
-    SendState(mpsc::Sender<RaftState>),
 }
 
 impl Actions {
@@ -452,11 +475,6 @@ impl Actions {
         self.actions.push(Action::SendTo(peer, message));
     }
 
-    #[cfg(test)]
-    fn send_state(&mut self, tx: mpsc::Sender<RaftState>) {
-        self.actions.push(Action::SendState(tx));
-    }
-
     /// Not quite an "action", but actions.log will output debug logging (immediately) on
     /// debug builds when DEBUG is set to true.
     #[cfg(test)]
@@ -478,14 +496,8 @@ fn handle_control_add(state: &mut RaftState, actions: &mut Actions, item: char) 
         // TODO: send a reply referring the caller to the leader..
         return;
     }
-    let term = state.current_term;
-    let entry = LogEntry::new(term, item);
-    let prev_log_index = state.log.len() as Index;
-    let prev_log_term = if prev_log_index > 1 {
-        state.log.get(prev_log_index).term
-    } else {
-        0
-    };
+    let entry = LogEntry::new(state.current_term, item);
+    let (prev_log_index, prev_log_term) = prev_log_info(state, state.log.len() as Index + 1);
 
     // append one entry locally (this will always succeed)
     state
@@ -538,9 +550,8 @@ fn handle_append_entries_req(
         };
     }
 
-    // If the update was successful, so do some bookkeeping:
+    // If the update was successful, do some bookkeeping:
     if success {
-        // TODO: test
         if state.mode == Mode::Candidate {
             // we lost the elction, so transition back to a follower
             change_mode(state, actions, Mode::Follower);
@@ -578,26 +589,25 @@ fn handle_append_entries_rep(
         return;
     }
 
+    if message.term > state.current_term {
+        // If the append wasn't successful because another leader has been elected,
+        // then transition back to follower state and acknowledge the new term
+        state.current_term = message.term;
+        change_mode(state, actions, Mode::Follower);
+    }
+
     if message.success {
         // If the append was successful, then update next_index and match_index accordingly
         state.next_index[peer] = message.next_index;
         state.match_index[peer] = message.next_index - 1;
-    } else {
-        if message.term > state.current_term {
-            // If the append wasn't successful because another leader has been elected,
-            // then transition back to follower state (but don't update current_term
-            // yet - that will happen when we get an AppendEntries as a follower)
-            // TODO: test
-            change_mode(state, actions, Mode::Follower);
-        } else {
-            // If the append wasn't successful because of a log conflict, select a lower match index for this peer
-            // and try again.  The peer sends the index of the first empty slot in the log,
-            // but we may need to go back further than that, so decrease next_index by at
-            // least one, but stop at 1.
-            state.next_index[peer] =
-                cmp::max(1, cmp::min(state.next_index[peer] - 1, message.next_index));
-            send_append_entries(state, actions, peer);
-        }
+    } else if state.mode == Mode::Leader {
+        // If the append wasn't successful because of a log conflict (and we are still leader),
+        // select a lower match index for this peer and try again.  The peer sends the index of the
+        // first empty slot in the log, but we may need to go back further than that, so decrease
+        // next_index by at least one, but stop at 1.
+        state.next_index[peer] =
+            cmp::max(1, cmp::min(state.next_index[peer] - 1, message.next_index));
+        send_append_entries(state, actions, peer);
     }
 }
 
@@ -682,13 +692,19 @@ fn handle_election_timer(state: &mut RaftState, actions: &mut Actions) {
 // Utility functions
 //
 
-fn send_append_entries(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
-    let prev_log_index = state.next_index[peer] - 1;
-    let prev_log_term = if prev_log_index > 1 {
-        state.log.get(prev_log_index).term
+/// Calculate prev_log_index and prev_log_term based on the given next_index.  This handles
+/// the boundary condition of next_index == 1
+fn prev_log_info(state: &RaftState, next_index: Index) -> (Index, Term) {
+    if next_index == 1 {
+        (0, 0)
     } else {
-        0
-    };
+        (next_index - 1, state.log.get(next_index - 1).term)
+    }
+}
+
+fn send_append_entries(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
+    assert_eq!(state.mode, Mode::Leader);
+    let (prev_log_index, prev_log_term) = prev_log_info(state, state.next_index[peer]);
     let message = Message::AppendEntriesReq(AppendEntriesReq {
         term: state.current_term,
         leader: state.node_id,
@@ -758,13 +774,14 @@ fn start_election(state: &mut RaftState, actions: &mut Actions) {
     state.current_term += 1;
     state.voted_for = Some(node_id);
 
+    let (last_log_index, last_log_term) = prev_log_info(state, state.log.len() as Index);
+
     for peer in 0..state.network_size {
         let message = Message::RequestVoteReq(RequestVoteReq {
             term: state.current_term,
             candidate_id: node_id,
-            // TODO: might have no log entries - do this in a utility function?
-            last_log_index: state.log.len() as Index,
-            last_log_term: state.log.get(state.log.len() as Index).term,
+            last_log_index,
+            last_log_term,
         });
         actions.send_to(peer, message);
     }
@@ -778,331 +795,427 @@ mod test {
     use crate::net::local::{LocalNetwork, LocalNode};
     use tokio::time::delay_for;
 
-    /// Creat a two node network, with a server on node 0 and a bare LocalNode for node 1
-    fn two_node_network() -> (RaftServer, LocalNode) {
-        let mut net = LocalNetwork::new(2);
-        let server = RaftServer::new(net.take(0));
-        let node = net.take(1);
-        (server, node)
+    /// Set up for a handler test
+    fn setup(network_size: usize) -> (RaftState, Actions) {
+        let state = RaftState {
+            node_id: 0,
+            network_size,
+            stop: false,
+            mode: Mode::Follower,
+            current_term: 0,
+            current_leader: None,
+            voted_for: None,
+            log: RaftLog::new(),
+            commit_index: 0,
+            last_applied: 0,
+            next_index: [1].repeat(network_size),
+            match_index: [0].repeat(network_size),
+        };
+        let mut actions = Actions::new();
+        actions.log_prefix = String::from("test");
+        (state, actions)
     }
 
-    /// Update the state of the given server
-    async fn update_state(server: &mut RaftServer, modifier: fn(&mut RaftState)) -> Fallible<()> {
-        let mut state = server.get_state().await?;
-        modifier(&mut state);
-        server.set_state(state).await?;
-
-        // since control and messages are on different mpsc channels, sleep a bit to make sure that
-        // the control message arrives first..
-        beat().await;
-
-        Ok(())
+    /// Shorthand for making a vector of log entries
+    fn logentries(tuples: Vec<(Term, char)>) -> Vec<LogEntry<char>> {
+        let mut entries = vec![];
+        for (t, i) in tuples {
+            entries.push(LogEntry::new(t, i));
+        }
+        entries
     }
 
-    /// Receive a message on behalf of the given node
-    async fn recv_on_node(node: &mut LocalNode) -> Fallible<(NodeId, Message)> {
-        let (node_id, msg) = node.recv().await?;
-        let message: Message = serde_json::from_slice(&msg[..])?;
-        Ok((node_id, message))
-    }
+    #[test]
+    fn test_handle_control_add_success() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Leader;
+        state.current_term = 2;
+        state.next_index[1] = 2;
+        state.log.add(LogEntry::new(1, 'a'));
 
-    /// Send a emssage from the given node to the given node
-    async fn send_from_node(node: &mut LocalNode, peer: NodeId, message: Message) -> Fallible<()> {
-        let msg = serde_json::to_vec(&message)?;
-        node.send(peer, msg).await?;
-        Ok(())
-    }
+        handle_control_add(&mut state, &mut actions, 'x');
 
-    /// Wait long enough for all of the mpsc channels to drain..
-    async fn beat() {
-        delay_for(Duration::from_millis(10)).await;
-    }
-
-    #[tokio::test]
-    async fn test_leader_add() -> Fallible<()> {
-        let (mut leader, mut follower_node) = two_node_network();
-
-        update_state(&mut leader, |state| state.mode = Mode::Leader).await?;
-
-        // make a client call to add an entry
-        leader.add('x').await?;
-
-        // leader should send an AppendEntriesReq message to followers..
-        let (_, message) = recv_on_node(&mut follower_node).await?;
-        assert_eq!(
-            message,
-            Message::AppendEntriesReq(AppendEntriesReq {
-                term: 0,
-                leader: 0,
-                prev_log_index: 0,
-                prev_log_term: 0,
-                entries: vec![LogEntry::new(0, 'x')],
-                leader_commit: 0
-            })
-        );
-
-        // ..and update its own state
-        let state = leader.get_state().await?;
-        assert_eq!(state.log.get(1), &LogEntry::new(0, 'x'));
-
-        leader.stop().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_follower_replicate_success() -> Fallible<()> {
-        let (mut follower, mut leader_node) = two_node_network();
-
-        // build a state with some entries already in place
-        update_state(&mut follower, |state| {
-            state.mode = Mode::Follower;
-            state.current_term = 5;
-            let entries = vec![
-                LogEntry::new(1, 'a'),
-                LogEntry::new(3, 'b'), // <-- commit_index
-                LogEntry::new(5, 'c'),
-            ];
-            state.log = RaftLog::new();
-            state.log.append_entries(0, 0, entries).unwrap();
-            state.commit_index = 2;
-        })
-        .await?;
-
-        // simulate an incoming message from the leader
-        send_from_node(
-            &mut leader_node,
-            0,
-            Message::AppendEntriesReq(AppendEntriesReq {
-                term: 6,
-                leader: 1,
-                prev_log_index: 3,
-                prev_log_term: 5,
-                entries: vec![LogEntry::new(5, 'x'), LogEntry::new(6, 'y')],
-                leader_commit: 3,
-            }),
-        )
-        .await?;
-
-        // ..get the reply
-        let (_, message) = recv_on_node(&mut leader_node).await?;
-        assert_eq!(
-            message,
-            Message::AppendEntriesRep(AppendEntriesRep {
-                term: 6,
-                next_index: 6,
-                success: true,
-            })
-        );
-
-        // ..and check the state
-        let state = follower.get_state().await?;
-        //println!("state: {:#?}", state);
-        //println!("state.log.len: {:#?}", state.log.len());
-        assert_eq!(state.log.len(), 5);
-        assert_eq!(state.log.get(4), &LogEntry::new(5, 'x'));
-        assert_eq!(state.log.get(5), &LogEntry::new(6, 'y'));
-        assert_eq!(state.commit_index, 3);
-        assert_eq!(state.current_term, 6);
-        assert_eq!(state.current_leader, Some(1));
-
-        follower.stop().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_follower_replicate_bad_term() -> Fallible<()> {
-        let (mut follower, mut leader_node) = two_node_network();
-
-        // build a state with some entries already in place
-        update_state(&mut follower, |state| {
-            state.mode = Mode::Follower;
-            state.current_term = 5;
-            let entries = vec![LogEntry::new(1, 'a')];
-            state.log = RaftLog::new();
-            state.log.append_entries(0, 0, entries).unwrap();
-            state.commit_index = 2;
-        })
-        .await?;
-
-        // simulate an incoming message from the leader
-        send_from_node(
-            &mut leader_node,
-            0,
-            Message::AppendEntriesReq(AppendEntriesReq {
-                term: 3, // too early
-                leader: 1,
-                prev_log_index: 3,
-                prev_log_term: 5,
-                entries: vec![LogEntry::new(5, 'x')],
-                leader_commit: 3,
-            }),
-        )
-        .await?;
-
-        // ..get the reply
-        let (_, message) = recv_on_node(&mut leader_node).await?;
-        assert_eq!(
-            message,
-            Message::AppendEntriesRep(AppendEntriesRep {
-                term: 5,
-                next_index: 2,
-                success: false,
-            })
-        );
-
-        // ..and check the state hasn't changed
-        let state = follower.get_state().await?;
-        assert_eq!(state.log.len(), 1);
-        assert_eq!(state.commit_index, 2);
-        assert_eq!(state.current_term, 5);
-        assert_eq!(state.current_leader, None);
-
-        follower.stop().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_follower_replicate_log_mismatch() -> Fallible<()> {
-        let (mut follower, mut leader_node) = two_node_network();
-
-        // build a state with some entries already in place
-        update_state(&mut follower, |state| {
-            state.mode = Mode::Follower;
-            state.current_term = 5;
-            let entries = vec![LogEntry::new(1, 'a'), LogEntry::new(4, 'p')];
-            state.log = RaftLog::new();
-            state.log.append_entries(0, 0, entries).unwrap();
-            state.commit_index = 2;
-        })
-        .await?;
-
-        // simulate an incoming message from the leader
-        send_from_node(
-            &mut leader_node,
-            0,
-            Message::AppendEntriesReq(AppendEntriesReq {
-                term: 5,
-                leader: 1,
-                prev_log_index: 2,
-                prev_log_term: 5, // does not match (4, p)
-                entries: vec![LogEntry::new(5, 'x')],
-                leader_commit: 3,
-            }),
-        )
-        .await?;
-
-        // ..get the reply
-        let (_, message) = recv_on_node(&mut leader_node).await?;
-        assert_eq!(
-            message,
-            Message::AppendEntriesRep(AppendEntriesRep {
-                term: 5,
-                next_index: 3,
-                success: false,
-            })
-        );
-
-        // ..and check the state hasn't changed
-        let state = follower.get_state().await?;
         assert_eq!(state.log.len(), 2);
-        assert_eq!(state.commit_index, 2);
-        assert_eq!(state.current_term, 5);
-        assert_eq!(state.current_leader, None);
-
-        follower.stop().await;
-        Ok(())
+        assert_eq!(state.log.get(2), &LogEntry::new(2, 'x'));
+        assert_eq!(
+            actions.actions,
+            vec![
+                Action::SendTo(
+                    0,
+                    Message::AppendEntriesReq(AppendEntriesReq {
+                        term: 2,
+                        leader: 0,
+                        prev_log_index: 0,
+                        prev_log_term: 0,
+                        entries: logentries(vec![(1, 'a'), (2, 'x')]),
+                        leader_commit: 0
+                    })
+                ),
+                Action::SetHeartbeatTimer(0),
+                Action::SendTo(
+                    1,
+                    Message::AppendEntriesReq(AppendEntriesReq {
+                        term: 2,
+                        leader: 0,
+                        // only appends one entry, as next_index was 2 for this peer
+                        prev_log_index: 1,
+                        prev_log_term: 1,
+                        entries: logentries(vec![(2, 'x')]),
+                        leader_commit: 0
+                    })
+                ),
+                Action::SetHeartbeatTimer(1),
+            ]
+        );
     }
 
-    #[tokio::test]
-    async fn test_leader_apply_entries_rep_success() -> Fallible<()> {
-        let (mut leader, mut follower_node) = two_node_network();
+    #[test]
+    fn test_handle_control_add_not_leader() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Follower;
 
-        update_state(&mut leader, |state| state.mode = Mode::Leader).await?;
+        handle_control_add(&mut state, &mut actions, 'x');
 
-        // simulate an incoming message from the follower
-        send_from_node(
-            &mut follower_node,
-            0,
-            Message::AppendEntriesRep(AppendEntriesRep {
-                term: 5,
+        assert_eq!(state.log.len(), 0);
+        assert_eq!(actions.actions, vec![]);
+    }
+
+    #[test]
+    fn test_append_entries_req_success() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Follower;
+        state.log.add(LogEntry::new(1, 'a'));
+        state.current_term = 7;
+
+        handle_append_entries_req(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesReq {
+                term: 7,
+                leader: 1,
+                prev_log_index: 1,
+                prev_log_term: 1,
+                entries: logentries(vec![(7, 'x')]),
+                leader_commit: 1,
+            },
+        );
+
+        assert_eq!(state.log.len(), 2);
+        assert_eq!(state.log.get(2), &LogEntry::new(7, 'x'));
+        assert_eq!(state.commit_index, 1);
+        assert_eq!(state.current_term, 7);
+        assert_eq!(state.current_leader, Some(1));
+        assert_eq!(
+            actions.actions,
+            vec![
+                Action::SetElectionTimer,
+                Action::SendTo(
+                    1,
+                    Message::AppendEntriesRep(AppendEntriesRep {
+                        term: 7,
+                        next_index: 3,
+                        success: true
+                    })
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn test_append_entries_req_success_as_candidate_lost_election() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Candidate;
+        state.log.add(LogEntry::new(1, 'a'));
+        state.current_term = 3;
+
+        handle_append_entries_req(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesReq {
+                term: 7,
+                leader: 1,
+                prev_log_index: 1,
+                prev_log_term: 1,
+                entries: vec![],
+                leader_commit: 4,
+            },
+        );
+
+        assert_eq!(state.mode, Mode::Follower);
+        assert_eq!(state.log.len(), 1);
+        assert_eq!(state.commit_index, 1); // limited by number of entries..
+        assert_eq!(state.current_term, 7);
+        assert_eq!(state.current_leader, Some(1));
+        assert_eq!(
+            actions.actions,
+            vec![
+                // stop the Candidate election timer..
+                Action::StopElectionTimer,
+                // ..and set a new one as Follower
+                Action::SetElectionTimer,
+                Action::SendTo(
+                    1,
+                    Message::AppendEntriesRep(AppendEntriesRep {
+                        term: 7,
+                        next_index: 2,
+                        success: true
+                    })
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn test_append_entries_req_old_term() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Follower;
+        state.current_term = 7;
+
+        handle_append_entries_req(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesReq {
+                term: 3,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(state.log.len(), 0);
+        assert_eq!(state.current_term, 7);
+        assert_eq!(
+            actions.actions,
+            vec![
+                Action::SetElectionTimer,
+                Action::SendTo(
+                    1,
+                    Message::AppendEntriesRep(AppendEntriesRep {
+                        term: 7,
+                        next_index: 1,
+                        success: false
+                    })
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn test_append_entries_req_log_gap() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Follower;
+        state.current_term = 7;
+
+        handle_append_entries_req(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesReq {
+                term: 7,
+                prev_log_index: 5,
+                prev_log_term: 7,
+                entries: vec![],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(state.log.len(), 0);
+        assert_eq!(state.current_term, 7);
+        assert_eq!(
+            actions.actions,
+            vec![
+                Action::SetElectionTimer,
+                Action::SendTo(
+                    1,
+                    Message::AppendEntriesRep(AppendEntriesRep {
+                        term: 7,
+                        next_index: 1,
+                        success: false
+                    })
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn test_append_entries_req_as_leader() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Leader;
+
+        handle_append_entries_req(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesReq {
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(state.log.len(), 0);
+        assert_eq!(actions.actions, vec![]);
+    }
+
+    #[test]
+    fn test_append_entries_rep_success() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Leader;
+
+        handle_append_entries_rep(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesRep {
                 next_index: 3,
                 success: true,
-            }),
-        )
-        .await?;
+                ..Default::default()
+            },
+        );
 
-        beat().await;
-
-        // and see that it updates it state
-        let state = leader.get_state().await?;
-        // TODO: assert_eq!(state.current_term, 5); // copied from follower
         assert_eq!(state.next_index[1], 3);
         assert_eq!(state.match_index[1], 2);
-
-        leader.stop().await;
-        Ok(())
+        assert_eq!(actions.actions, vec![]);
     }
 
-    #[tokio::test]
-    async fn test_leader_apply_entries_rep_failure() -> Fallible<()> {
-        let (mut leader, mut follower_node) = two_node_network();
+    #[test]
+    fn test_append_entries_rep_not_success_decrement() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Leader;
+        state.log.add(LogEntry::new(1, 'a'));
+        state.log.add(LogEntry::new(1, 'b'));
+        state.next_index[1] = 2;
 
-        update_state(&mut leader, |state| {
-            state.mode = Mode::Leader;
-            let entries = vec![
-                LogEntry::new(1, 'a'),
-                LogEntry::new(3, 'b'),
-                LogEntry::new(5, 'c'),
-                LogEntry::new(5, 'd'),
-                LogEntry::new(5, 'e'),
-            ];
-            state.log = RaftLog::new();
-            state.log.append_entries(0, 0, entries).unwrap();
-            state.current_term = 5;
-            state.match_index[1] = 1;
-            state.next_index[1] = 5;
-        })
-        .await?;
-
-        // simulate an incoming message from the follower indicating that
-        // it needs more log entries
-        send_from_node(
-            &mut follower_node,
-            0,
-            Message::AppendEntriesRep(AppendEntriesRep {
-                term: 5,
-                next_index: 3,
+        handle_append_entries_rep(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesRep {
+                next_index: 2, // peer claims it has one entry that didn't match
                 success: false,
-            }),
-        )
-        .await?;
-
-        // leader should send an AppendEntriesReq message to followers..
-        let (_, message) = recv_on_node(&mut follower_node).await?;
-        assert_eq!(
-            message,
-            Message::AppendEntriesReq(AppendEntriesReq {
-                term: 5,
-                leader: 0,
-                prev_log_index: 2,
-                prev_log_term: 3,
-                entries: vec![
-                    LogEntry::new(5, 'c'),
-                    LogEntry::new(5, 'd'),
-                    LogEntry::new(5, 'e'),
-                ],
-                leader_commit: 0
-            })
+                ..Default::default()
+            },
         );
 
-        // and see that it updates it state
-        let state = leader.get_state().await?;
-        assert_eq!(state.current_term, 5);
-        assert_eq!(state.next_index[1], 3);
-        assert_eq!(state.match_index[1], 1);
+        assert_eq!(state.next_index[1], 1); // decremented..
+        assert_eq!(state.match_index[1], 0); // not changed
+        assert_eq!(
+            actions.actions,
+            vec![
+                Action::SendTo(
+                    1,
+                    Message::AppendEntriesReq(AppendEntriesReq {
+                        term: 0,
+                        leader: 0,
+                        prev_log_index: 0,
+                        prev_log_term: 0,
+                        entries: logentries(vec![(1, 'a'), (1, 'b')]),
+                        leader_commit: 0
+                    })
+                ),
+                Action::SetHeartbeatTimer(1),
+            ]
+        );
+    }
 
-        leader.stop().await;
-        Ok(())
+    #[test]
+    fn test_append_entries_rep_not_success_supplied_next_index() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Leader;
+        state.log.add(LogEntry::new(1, 'a'));
+        state.log.add(LogEntry::new(2, 'b'));
+        state.log.add(LogEntry::new(2, 'c'));
+        state.log.add(LogEntry::new(2, 'd'));
+        state.next_index[1] = 4;
+
+        handle_append_entries_rep(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesRep {
+                next_index: 2, // peer says it has one entry
+                success: false,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(state.next_index[1], 2); // set per peer (down from 4)
+        assert_eq!(state.match_index[1], 0); // not changed
+        assert_eq!(
+            actions.actions,
+            vec![
+                Action::SendTo(
+                    1,
+                    Message::AppendEntriesReq(AppendEntriesReq {
+                        term: 0,
+                        leader: 0,
+                        prev_log_index: 1,
+                        prev_log_term: 1,
+                        entries: logentries(vec![(2, 'b'), (2, 'c'), (2, 'd')]),
+                        leader_commit: 0
+                    })
+                ),
+                Action::SetHeartbeatTimer(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_append_entries_rep_not_success_new_term() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Leader;
+        state.current_term = 4;
+
+        handle_append_entries_rep(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesRep {
+                term: 5,
+                success: false,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(state.current_term, 5);
+        assert_eq!(state.mode, Mode::Follower);
+        assert_eq!(
+            actions.actions,
+            vec![Action::StopHeartbeatTimers, Action::SetElectionTimer,]
+        );
+    }
+
+    #[test]
+    fn test_append_entries_rep_as_follower() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Follower;
+
+        handle_append_entries_rep(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesRep {
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(actions.actions, vec![]);
+    }
+
+    #[test]
+    fn test_append_entries_rep_as_candidate() {
+        let (mut state, mut actions) = setup(2);
+        state.mode = Mode::Candidate;
+
+        handle_append_entries_rep(
+            &mut state,
+            &mut actions,
+            1,
+            &AppendEntriesRep {
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(actions.actions, vec![]);
     }
 
     /*
