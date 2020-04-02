@@ -36,9 +36,8 @@ pub struct RaftServer {
     /// A channel to send control messages to the background task
     control_tx: mpsc::Sender<Control>,
 
-    /// A channel for getting state when requested (Control::GetState)
-    #[cfg(test)]
-    state_rx: mpsc::Receiver<RaftState>,
+    /// A channel to receive control messages from the background task
+    control_rx: mpsc::Receiver<Control>,
 }
 
 /* Most of the work of a server occurs in a background task, reacting to messages and timers.  In
@@ -58,13 +57,8 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     /// Channel containing control messages from other tasks
     control_rx: mpsc::Receiver<Control>,
 
-    /// A channel for transmitting state when requested (Control::GetState)
-    #[cfg(test)]
-    state_tx: mpsc::Sender<RaftState>,
-
-    /// True if another task is waiting for state on state_tx
-    #[cfg(test)]
-    want_state: bool,
+    /// Channel for sending control information back to other tasks
+    control_tx: mpsc::Sender<Control>,
 
     /// A queue of Timer objects
     timers: DelayQueue<Timer>,
@@ -82,20 +76,21 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     actions: Actions,
 }
 
-/// Control messages sent to the background task
-#[derive(Debug)]
+/// Control messages sent between RaftServer and RaftServerInner
+#[derive(Debug, PartialEq)]
 enum Control {
-    /// Stop the task
+    /// (server -> inner) Stop the task
     Stop,
 
-    /// Add a new entry
+    /// (server -> inner) Add a new entry
     Add(char),
 
-    /// Return the current log for debugging
+    /// (server -> inner) Send a SetState back containing the current state
     #[cfg(test)]
     GetState,
 
-    /// Set the current log for debugging
+    /// (server -> inner) Set the current raft state;
+    /// (inner -> server) reply to GetState
     #[cfg(test)]
     SetState(RaftState),
 }
@@ -119,7 +114,7 @@ enum Mode {
 }
 
 /// Raft-related state of the server
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct RaftState {
     /// This node
     node_id: NodeId,
@@ -204,21 +199,17 @@ enum Message {
 
 impl RaftServer {
     pub fn new<N: RaftNetworkNode + Sync + Send + 'static>(node: N) -> RaftServer {
-        let (control_tx, control_rx) = mpsc::channel(1);
+        let (control_tx_in, control_rx_in) = mpsc::channel(1);
+        let (control_tx_out, control_rx_out) = mpsc::channel(1);
         let node_id = node.node_id();
         let network_size = node.network_size();
-        let (state_tx, state_rx): (mpsc::Sender<RaftState>, mpsc::Receiver<RaftState>) =
-            mpsc::channel(1);
         let inner = RaftServerInner {
             node,
             timers: DelayQueue::new(),
             heartbeat_delay: iter::repeat_with(|| None).take(network_size).collect(),
             election_timeout: None,
-            control_rx,
-            #[cfg(test)]
-            state_tx,
-            #[cfg(test)]
-            want_state: false,
+            control_rx: control_rx_in,
+            control_tx: control_tx_out,
             state: RaftState {
                 node_id,
                 network_size,
@@ -239,9 +230,8 @@ impl RaftServer {
 
         RaftServer {
             task: tokio::spawn(async move { inner.run().await }),
-            control_tx,
-            #[cfg(test)]
-            state_rx,
+            control_tx: control_tx_in,
+            control_rx: control_rx_out,
         }
     }
 
@@ -260,7 +250,11 @@ impl RaftServer {
     #[cfg(test)]
     async fn get_state(&mut self) -> Fallible<RaftState> {
         self.control_tx.send(Control::GetState).await?;
-        Ok(self.state_rx.recv().await.unwrap())
+        if let Control::SetState(state) = self.control_rx.recv().await.unwrap() {
+            return Ok(state);
+        } else {
+            panic!("got unexpected control message");
+        }
     }
 
     /// Set the current server state (for testing)
@@ -303,15 +297,6 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
             // execute any actions accumulated in this loop
             self.execute_actions().await.unwrap();
-
-            // respond with the current state, if requested via the control channel
-            #[cfg(test)]
-            {
-                if self.want_state {
-                    self.want_state = false;
-                    self.state_tx.send(self.state.clone()).await.unwrap();
-                }
-            }
         }
     }
 
@@ -378,7 +363,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             Control::Add(item) => handle_control_add(&mut self.state, &mut self.actions, item),
 
             #[cfg(test)]
-            Control::GetState => self.want_state = true,
+            Control::GetState => handle_control_get_state(&mut self.state, &mut self.actions),
 
             #[cfg(test)]
             Control::SetState(state) => self.state = state,
@@ -426,6 +411,9 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     let msg = serde_json::to_vec(&message)?;
                     self.node.send(peer, msg).await?;
                 }
+                Action::SendControl(control) => {
+                    self.control_tx.send(control).await?;
+                }
             };
         }
         Ok(())
@@ -465,6 +453,9 @@ enum Action {
 
     /// Send a message to a peer
     SendTo(NodeId, Message),
+
+    /// Send a message on the control channel
+    SendControl(Control),
 }
 
 impl Actions {
@@ -508,6 +499,10 @@ impl Actions {
         self.actions.push(Action::SendTo(peer, message));
     }
 
+    fn send_control(&mut self, control: Control) {
+        self.actions.push(Action::SendControl(control));
+    }
+
     /// Not quite an "action", but actions.log will output debug logging (immediately) on
     /// debug builds when DEBUG is set to true.
     #[cfg(test)]
@@ -546,6 +541,11 @@ fn handle_control_add(state: &mut RaftState, actions: &mut Actions, item: char) 
     for peer in 0..state.network_size {
         send_append_entries(state, actions, peer);
     }
+}
+
+#[cfg(test)]
+fn handle_control_get_state(state: &mut RaftState, actions: &mut Actions) {
+    actions.send_control(Control::SetState(state.clone()));
 }
 
 fn handle_append_entries_req(
