@@ -101,6 +101,12 @@ enum Mode {
 /// Raft-related state of the server
 #[derive(Debug, Clone)]
 struct RaftState {
+    /// This node
+    node_id: NodeId,
+
+    /// Number of nodes in the network
+    network_size: usize,
+
     /// Current server mode
     mode: Mode,
 
@@ -130,36 +136,50 @@ struct RaftState {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct AppendEntriesReq {
+    term: Term,
+    leader: NodeId,
+    prev_log_index: Index,
+    prev_log_term: Term,
+    entries: Vec<LogEntry<char>>,
+    leader_commit: Index,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct AppendEntriesRep {
+    term: Term,
+    next_index: Index,
+    success: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct RequestVoteReq {
+    term: Term,
+    candidate_id: NodeId,
+    last_log_index: Index,
+    last_log_term: Term,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct RequestVoteRep {
+    term: Term,
+    vote_granted: bool,
+}
+
+/// Messages transferred between Raft nodes
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 enum Message {
-    AppendEntriesReq {
-        term: Term,
-        leader: NodeId,
-        prev_log_index: Index,
-        prev_log_term: Term,
-        entries: Vec<LogEntry<char>>,
-        leader_commit: Index,
-    },
-    AppendEntriesRep {
-        term: Term,
-        next_index: Index,
-        success: bool,
-    },
-    RequestVoteReq {
-        term: Term,
-        candidate_id: NodeId,
-        last_log_index: Index,
-        last_log_term: Term,
-    },
-    RequestVoteRep {
-        term: Term,
-        vote_granted: bool,
-    },
+    AppendEntriesReq(AppendEntriesReq),
+    AppendEntriesRep(AppendEntriesRep),
+    RequestVoteReq(RequestVoteReq),
+    RequestVoteRep(RequestVoteRep),
 }
 
 impl RaftServer {
     pub fn new<N: RaftNetworkNode + Sync + Send + 'static>(node: N) -> RaftServer {
         let (control_tx, control_rx) = mpsc::channel(1);
+        let node_id = node.node_id();
         let network_size = node.network_size();
         let inner = RaftServerInner {
             node,
@@ -168,6 +188,8 @@ impl RaftServer {
             election_timeout: None,
             control_rx,
             state: RaftState {
+                node_id,
+                network_size,
                 mode: Mode::Follower,
                 current_term: 0,
                 current_leader: None,
@@ -245,14 +267,14 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         let message: Message = serde_json::from_slice(&msg[..])?;
         self.log(format!("Handling Message {:?} from {}", message, peer));
         match message {
-            Message::AppendEntriesReq {
+            Message::AppendEntriesReq(AppendEntriesReq {
                 term,
                 leader,
                 prev_log_index,
                 prev_log_term,
                 entries,
                 leader_commit,
-            } => {
+            }) => {
                 if self.state.mode == Mode::Leader {
                     // leaders don't respond to this message
                     return Ok(());
@@ -302,57 +324,31 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
                 self.send_to(
                     peer,
-                    &Message::AppendEntriesRep {
+                    &Message::AppendEntriesRep(AppendEntriesRep {
                         term: self.state.current_term,
                         success,
                         next_index: self.state.log.len() as Index + 1,
-                    },
+                    }),
                 )
                 .await?;
 
                 Ok(())
             }
 
-            Message::AppendEntriesRep {
-                term,
-                success,
-                next_index,
-            } => {
-                if self.state.mode != Mode::Leader {
-                    // if we're no longer a leader, there's nothing to do with this response
-                    return Ok(());
-                }
-
-                if success {
-                    // If the append was successful, then update next_index and match_index accordingly
-                    self.state.next_index[peer] = next_index;
-                    self.state.match_index[peer] = next_index - 1;
-                } else {
-                    if term > self.state.current_term {
-                        // If the append wasn't successful because another leader has been elected,
-                        // then transition back to follower state (but don't update current_term
-                        // yet - that will happen when we get an AppendEntries as a follower)
-                        // TODO: test
-                        self.change_mode(Mode::Follower).await?;
-                    } else {
-                        // If the append wasn't successful because of a log conflict, select a lower match index for this peer
-                        // and try again.  The peer sends the index of the first empty slot in the log,
-                        // but we may need to go back further than that, so decrease next_index by at
-                        // least one, but stop at 1.
-                        self.state.next_index[peer] =
-                            cmp::max(1, cmp::min(self.state.next_index[peer] - 1, next_index));
-                        self.send_append_entries(peer).await?;
-                    }
-                }
+            Message::AppendEntriesRep(ref message) => {
+                // TODO: single Actions object per RaftServerInner, clear it on each message?
+                let mut actions = Actions::new();
+                handle_append_entries_rep(&mut self.state, peer, message, &mut actions);
+                self.execute_actions(actions).await?;
                 Ok(())
             }
 
-            Message::RequestVoteReq {
+            Message::RequestVoteReq(RequestVoteReq {
                 term,
                 candidate_id,
                 last_log_index,
                 last_log_term,
-            } => {
+            }) => {
                 let mut vote_granted = true;
                 // "Reply false if term < currentTerm"
                 if term < self.state.current_term {
@@ -389,17 +385,17 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 
                 self.send_to(
                     candidate_id,
-                    &Message::RequestVoteRep {
+                    &Message::RequestVoteRep(RequestVoteRep {
                         term: self.state.current_term,
                         vote_granted,
-                    },
+                    }),
                 )
                 .await?;
                 Ok(())
             }
             // TODO: XXX HERE
             // Need to track number of votes for us in a state variable
-            Message::RequestVoteRep { term, vote_granted } => Ok(()),
+            Message::RequestVoteRep(RequestVoteRep { term, vote_granted }) => Ok(()),
         }
     }
 
@@ -537,13 +533,13 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         self.state.current_term += 1;
         self.state.voted_for = Some(node_id);
 
-        let message = Message::RequestVoteReq {
+        let message = Message::RequestVoteReq(RequestVoteReq {
             term: self.state.current_term,
             candidate_id: node_id,
-            // TODO: might have no log entries - do this in a function?
+            // TODO: might have no log entries - do this in a utility function?
             last_log_index: self.state.log.len() as Index,
             last_log_term: self.state.log.get(self.state.log.len() as Index).term,
-        };
+        });
         for peer in 0..self.node.network_size() {
             self.send_to(peer, &message).await?;
         }
@@ -583,14 +579,14 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         } else {
             0
         };
-        let message = Message::AppendEntriesReq {
+        let message = Message::AppendEntriesReq(AppendEntriesReq {
             term: self.state.current_term,
             leader: self.node.node_id(),
             prev_log_index,
             prev_log_term,
             entries: self.state.log.slice(prev_log_index as usize + 1..).to_vec(),
             leader_commit: self.state.commit_index,
-        };
+        });
         self.send_to(peer, &message).await?;
 
         // queue another AppendEntries well before the heartbeat expires
@@ -603,6 +599,45 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
         Ok(())
     }
 
+    async fn execute_actions(&mut self, mut actions: Actions) -> Fallible<()> {
+        for action in actions.drain() {
+            match action {
+                Action::SetElectionTimer => {
+                    if let Some(k) = self.election_timeout.take() {
+                        self.timers.remove(&k);
+                    }
+                    self.election_timeout =
+                        Some(self.timers.insert(Timer::CallElection, ELECTION_TIMEOUT));
+                }
+                Action::StopElectionTimer => {
+                    if let Some(k) = self.election_timeout.take() {
+                        self.timers.remove(&k);
+                    }
+                }
+                Action::SetHeartbeatTimer(peer) => {
+                    if let Some(delay_key) = self.heartbeat_delay[peer].take() {
+                        self.timers.remove(&delay_key);
+                    }
+                    self.heartbeat_delay[peer] =
+                        Some(self.timers.insert(Timer::FollowerUpdate(peer), HEARTBEAT));
+                }
+                Action::StopHeartbeatTimers => {
+                    for delay in &mut self.heartbeat_delay.iter_mut() {
+                        if let Some(k) = delay.take() {
+                            self.timers.remove(&k);
+                        }
+                    }
+                }
+                Action::SendTo(peer, message) => {
+                    let msg = serde_json::to_vec(&message)?;
+                    self.node.send(peer, msg).await?;
+                }
+            };
+        }
+        Ok(())
+    }
+
+    // TODO: use a task-local variable?
     fn log<S: AsRef<str>>(&self, msg: S) {
         if cfg!(test) && DEBUG {
             println!(
@@ -613,6 +648,176 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             );
         }
     }
+}
+
+/// Actions represent the changes that should be made in response to an algorithm event.
+///
+/// This abstraction is not necessary to the algorithm, but has a few advantages:
+///  - all event handlers are synchronous
+///  - side-effects are limited to state changes and actions
+///  - event handlers are easy to test
+///
+/// The struct provides convenience functions to add an action; the RaftServerInner's
+/// execute_actions method then actually performs the actions.
+struct Actions {
+    actions: Vec<Action>,
+}
+
+/// See Actions
+enum Action {
+    /// Start the election_timeout timer (resetting any existing timer)
+    SetElectionTimer,
+
+    /// Stop the election_timeout timer.
+    StopElectionTimer,
+
+    /// Start the heartbeat timer for the given peer (resetting any existing timer)
+    SetHeartbeatTimer(NodeId),
+
+    /// Stop the heartbeat timer for all peers
+    StopHeartbeatTimers,
+
+    /// Send a message to a peer
+    SendTo(NodeId, Message),
+}
+
+impl Actions {
+    fn new() -> Actions {
+        Actions { actions: vec![] }
+    }
+
+    fn drain(&mut self) -> std::vec::Drain<Action> {
+        self.actions.drain(..)
+    }
+
+    fn set_election_timer(&mut self) {
+        self.actions.push(Action::SetElectionTimer);
+    }
+
+    fn stop_election_timer(&mut self) {
+        self.actions.push(Action::StopElectionTimer);
+    }
+
+    fn set_heartbeat_timer(&mut self, peer: NodeId) {
+        self.actions.push(Action::SetHeartbeatTimer(peer));
+    }
+
+    fn stop_heartbeat_timers(&mut self) {
+        self.actions.push(Action::StopHeartbeatTimers);
+    }
+
+    fn send_to(&mut self, peer: NodeId, message: Message) {
+        self.actions.push(Action::SendTo(peer, message));
+    }
+}
+
+//
+// Event handlers
+//
+
+fn handle_append_entries_rep(
+    state: &mut RaftState,
+    peer: NodeId,
+    message: &AppendEntriesRep,
+    actions: &mut Actions,
+) {
+    if state.mode != Mode::Leader {
+        // if we're no longer a leader, there's nothing to do with this response
+        return;
+    }
+
+    if message.success {
+        // If the append was successful, then update next_index and match_index accordingly
+        state.next_index[peer] = message.next_index;
+        state.match_index[peer] = message.next_index - 1;
+    } else {
+        if message.term > state.current_term {
+            // If the append wasn't successful because another leader has been elected,
+            // then transition back to follower state (but don't update current_term
+            // yet - that will happen when we get an AppendEntries as a follower)
+            // TODO: test
+            change_mode(state, actions, Mode::Follower);
+        } else {
+            // If the append wasn't successful because of a log conflict, select a lower match index for this peer
+            // and try again.  The peer sends the index of the first empty slot in the log,
+            // but we may need to go back further than that, so decrease next_index by at
+            // least one, but stop at 1.
+            state.next_index[peer] =
+                cmp::max(1, cmp::min(state.next_index[peer] - 1, message.next_index));
+            send_append_entries(state, actions, peer);
+        }
+    }
+}
+
+//
+// Utility functions
+//
+
+fn send_append_entries(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
+    let prev_log_index = state.next_index[peer] - 1;
+    let prev_log_term = if prev_log_index > 1 {
+        state.log.get(prev_log_index).term
+    } else {
+        0
+    };
+    let message = Message::AppendEntriesReq(AppendEntriesReq {
+        term: state.current_term,
+        leader: state.node_id,
+        prev_log_index,
+        prev_log_term,
+        entries: state.log.slice(prev_log_index as usize + 1..).to_vec(),
+        leader_commit: state.commit_index,
+    });
+    actions.send_to(peer, message);
+
+    // set the timeout so we send another AppendEntries soon
+    actions.set_heartbeat_timer(peer);
+}
+
+fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
+    //actions.log(format!("Transitioning to mode {:?}", new_mode));
+
+    let old_mode = state.mode;
+    assert!(old_mode != new_mode);
+    state.mode = new_mode;
+
+    // shut down anything running for the old mode..
+    match old_mode {
+        Mode::Follower => {
+            actions.stop_election_timer();
+        }
+        Mode::Candidate => {
+            actions.stop_election_timer();
+        }
+        Mode::Leader => {
+            actions.stop_heartbeat_timers();
+        }
+    };
+
+    // .. and set up for the new mode
+    match new_mode {
+        Mode::Follower => {
+            actions.set_election_timer();
+        }
+        Mode::Candidate => {
+            // TODO
+            // actions.start_election().await?;
+        }
+        Mode::Leader => {
+            state.current_leader = Some(state.node_id);
+
+            // re-initialize state tracking other nodes' logs
+            for peer in 0..state.network_size {
+                state.next_index[peer] = state.log.len() as Index + 1;
+                state.match_index[peer] = 0;
+            }
+
+            // assert leadership by sending AppendEntriesReq to everyone
+            for peer in 0..state.network_size {
+                send_append_entries(state, actions, peer);
+            }
+        }
+    };
 }
 
 #[cfg(test)]
@@ -674,14 +879,14 @@ mod test {
         let (_, message) = recv_on_node(&mut follower_node).await?;
         assert_eq!(
             message,
-            Message::AppendEntriesReq {
+            Message::AppendEntriesReq(AppendEntriesReq {
                 term: 0,
                 leader: 0,
                 prev_log_index: 0,
                 prev_log_term: 0,
                 entries: vec![LogEntry::new(0, 'x')],
                 leader_commit: 0
-            }
+            })
         );
 
         // ..and update its own state
@@ -715,14 +920,14 @@ mod test {
         send_from_node(
             &mut leader_node,
             0,
-            Message::AppendEntriesReq {
+            Message::AppendEntriesReq(AppendEntriesReq {
                 term: 6,
                 leader: 1,
                 prev_log_index: 3,
                 prev_log_term: 5,
                 entries: vec![LogEntry::new(5, 'x'), LogEntry::new(6, 'y')],
                 leader_commit: 3,
-            },
+            }),
         )
         .await?;
 
@@ -730,11 +935,11 @@ mod test {
         let (_, message) = recv_on_node(&mut leader_node).await?;
         assert_eq!(
             message,
-            Message::AppendEntriesRep {
+            Message::AppendEntriesRep(AppendEntriesRep {
                 term: 6,
                 next_index: 6,
                 success: true,
-            }
+            })
         );
 
         // ..and check the state
@@ -771,14 +976,14 @@ mod test {
         send_from_node(
             &mut leader_node,
             0,
-            Message::AppendEntriesReq {
+            Message::AppendEntriesReq(AppendEntriesReq {
                 term: 3, // too early
                 leader: 1,
                 prev_log_index: 3,
                 prev_log_term: 5,
                 entries: vec![LogEntry::new(5, 'x')],
                 leader_commit: 3,
-            },
+            }),
         )
         .await?;
 
@@ -786,11 +991,11 @@ mod test {
         let (_, message) = recv_on_node(&mut leader_node).await?;
         assert_eq!(
             message,
-            Message::AppendEntriesRep {
+            Message::AppendEntriesRep(AppendEntriesRep {
                 term: 5,
                 next_index: 2,
                 success: false,
-            }
+            })
         );
 
         // ..and check the state hasn't changed
@@ -823,14 +1028,14 @@ mod test {
         send_from_node(
             &mut leader_node,
             0,
-            Message::AppendEntriesReq {
+            Message::AppendEntriesReq(AppendEntriesReq {
                 term: 5,
                 leader: 1,
                 prev_log_index: 2,
                 prev_log_term: 5, // does not match (4, p)
                 entries: vec![LogEntry::new(5, 'x')],
                 leader_commit: 3,
-            },
+            }),
         )
         .await?;
 
@@ -838,11 +1043,11 @@ mod test {
         let (_, message) = recv_on_node(&mut leader_node).await?;
         assert_eq!(
             message,
-            Message::AppendEntriesRep {
+            Message::AppendEntriesRep(AppendEntriesRep {
                 term: 5,
                 next_index: 3,
                 success: false,
-            }
+            })
         );
 
         // ..and check the state hasn't changed
@@ -866,11 +1071,11 @@ mod test {
         send_from_node(
             &mut follower_node,
             0,
-            Message::AppendEntriesRep {
+            Message::AppendEntriesRep(AppendEntriesRep {
                 term: 5,
                 next_index: 3,
                 success: true,
-            },
+            }),
         )
         .await?;
 
@@ -912,11 +1117,11 @@ mod test {
         send_from_node(
             &mut follower_node,
             0,
-            Message::AppendEntriesRep {
+            Message::AppendEntriesRep(AppendEntriesRep {
                 term: 5,
                 next_index: 3,
                 success: false,
-            },
+            }),
         )
         .await?;
 
@@ -924,7 +1129,7 @@ mod test {
         let (_, message) = recv_on_node(&mut follower_node).await?;
         assert_eq!(
             message,
-            Message::AppendEntriesReq {
+            Message::AppendEntriesReq(AppendEntriesReq {
                 term: 5,
                 leader: 0,
                 prev_log_index: 2,
@@ -935,7 +1140,7 @@ mod test {
                     LogEntry::new(5, 'e'),
                 ],
                 leader_commit: 0
-            }
+            })
         );
 
         // and see that it updates it state
