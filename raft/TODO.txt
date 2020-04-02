@@ -1,3 +1,12 @@
+## Next
+
+* Implement user state machine using a trait
+  - execute within update_commitment, include output in action to send reply to client
+  - trait DistributedState<Event=..>
+    - RaftState:
+      distributed_state: DS,
+    - LogEntry<(RequestId, DS::Event)>??
+
 ## Doc
 
 * doc deviations from paper
@@ -6,7 +15,6 @@
 ## Misc
 
 * Handle message ser/de somewhere better
-* Parameterize better on item.. (currently char)
 
 ## Server
 
