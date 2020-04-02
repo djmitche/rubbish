@@ -2,10 +2,11 @@ use crate::log::{LogEntry, RaftLog};
 use crate::net::{NodeId, RaftNetworkNode};
 use crate::{Index, Term};
 use failure::Fallible;
+use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::iter;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task;
@@ -14,12 +15,17 @@ use tokio::time::{delay_queue, DelayQueue};
 /// Set this to true to enable lots of println!
 const DEBUG: bool = true;
 
-/// Max time between AppendEntries calls
-const HEARTBEAT: Duration = Duration::from_millis(100);
-
-/// Time after which a new election should be called; this should be at least
-/// twice HEARTBEAT.
+/// Time after which a new election should be called; this should be well over
+/// the maximum RTT between two nodes, and well under the servers' MTBF.
 const ELECTION_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Range of random times around ELECTION_TIMEOUT in which to call an election.  This
+/// must be smaller than ELECTION_TIMEOUT - HEARTBEAT.
+const ELECTION_TIMEOUT_FUZZ: Duration = Duration::from_millis(100);
+
+/// Maximum time between AppendEntries calls.  This should be at least an RTT less than
+/// ELECTION_TIMEOUT.
+const HEARTBEAT: Duration = Duration::from_millis(200);
 
 /// A RaftServer represents a running server participating in a Raft.
 #[derive(Debug)]
@@ -150,6 +156,9 @@ struct RaftState {
 
     /// "for each server, index of the highest log entry known to be replicated on server"
     match_index: Vec<Index>,
+
+    /// true for all nodes that have voted for this node as leader
+    voters: Vec<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -223,6 +232,7 @@ impl RaftServer {
                 last_applied: 0,
                 next_index: [1].repeat(network_size),
                 match_index: [0].repeat(network_size),
+                voters: [false].repeat(network_size),
             },
             actions: Actions::new(),
         };
@@ -267,13 +277,23 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
     async fn run(mut self) {
         #[cfg(test)]
         {
-            self.actions.set_log_prefix(format!(
-                "server={} mode={:?}",
-                self.state.node_id, self.state.mode
-            ));
+            self.actions
+                .set_log_prefix(format!("server={}", self.state.node_id,));
         }
 
+        // start things up..
+        self.startup();
+        self.execute_actions().await.unwrap();
+
         while !self.state.stop {
+            #[cfg(test)]
+            {
+                self.actions.set_log_prefix(format!(
+                    "server={} ({:?})",
+                    self.state.node_id, self.state.mode
+                ));
+            }
+
             tokio::select! {
                 // TODO: is pattern-matching the right idea here??
                 Some(c) = self.control_rx.recv() => self.handle_control(c),
@@ -284,7 +304,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
             // execute any actions accumulated in this loop
             self.execute_actions().await.unwrap();
 
-            // respond with the final state, if requested via the control channel
+            // respond with the current state, if requested via the control channel
             #[cfg(test)]
             {
                 if self.want_state {
@@ -293,6 +313,12 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                 }
             }
         }
+    }
+
+    fn startup(&mut self) {
+        // on startup, set the election timer, so that we either learn about an existing leader
+        // or try to become a leader
+        self.actions.set_election_timer();
     }
 
     fn handle_message(&mut self, peer: NodeId, msg: Vec<u8>) {
@@ -367,8 +393,15 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     if let Some(k) = self.election_timeout.take() {
                         self.timers.remove(&k);
                     }
-                    self.election_timeout =
-                        Some(self.timers.insert(Timer::Election, ELECTION_TIMEOUT));
+                    // select a time within ELECTION_TIMEOUT += ELECTION_TIMEOUT_FUZZ
+                    let election_timeout = ELECTION_TIMEOUT.as_millis() as u64;
+                    let fuzz = ELECTION_TIMEOUT_FUZZ.as_millis() as u64;
+                    let mut rng = thread_rng();
+                    let millis = rng.gen_range(election_timeout - fuzz, election_timeout + fuzz);
+                    self.election_timeout = Some(
+                        self.timers
+                            .insert(Timer::Election, Duration::from_millis(millis)),
+                    );
                 }
                 Action::StopElectionTimer => {
                     if let Some(k) = self.election_timeout.take() {
@@ -480,7 +513,11 @@ impl Actions {
     #[cfg(test)]
     fn log<S: AsRef<str>>(&self, msg: S) {
         if DEBUG {
-            println!("{} - {}", self.log_prefix, msg.as_ref());
+            let millis = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            println!("{}: {} - {}", millis, self.log_prefix, msg.as_ref());
         }
     }
     #[cfg(not(test))]
@@ -617,7 +654,10 @@ fn handle_request_vote_req(
     peer: NodeId,
     message: &RequestVoteReq,
 ) {
+    // TODO: test
     let mut vote_granted = true;
+
+    // TODO: transition to follower if term > current_term (helper function)
 
     // "Reply false if term < currentTerm"
     if message.term < state.current_term {
@@ -640,13 +680,11 @@ fn handle_request_vote_req(
     // up-to-date.  If the logs end with the same term, then whichever log is longer is
     // more up-to-date."
     if vote_granted {
-        // TODO: might not have any entries
-        let state_last_log_index = state.log.len() as Index;
-        let receiver_last_log_term = state.log.get(state_last_log_index).term;
-        if message.last_log_term < receiver_last_log_term {
+        let (last_log_index, last_log_term) = prev_log_info(state, state.log.len() as Index + 1);
+        if message.last_log_term < last_log_term {
             vote_granted = false;
-        } else if message.last_log_term == receiver_last_log_term {
-            if message.last_log_index < state_last_log_index {
+        } else if message.last_log_term == last_log_term {
+            if message.last_log_index < last_log_index {
                 vote_granted = false;
             }
         }
@@ -655,7 +693,7 @@ fn handle_request_vote_req(
     actions.send_to(
         peer,
         Message::RequestVoteRep(RequestVoteRep {
-            term: state.current_term,
+            term: message.term, // TODO: should this inc its own currentTerm?
             vote_granted,
         }),
     );
@@ -667,16 +705,35 @@ fn handle_request_vote_rep(
     peer: NodeId,
     message: &RequestVoteRep,
 ) {
-    // TODO!!
-    // need to track number of votes for us in state
+    // TODO: test
+    if state.mode != Mode::Candidate {
+        // thank you for your vote .. but I'm not running!
+        return;
+    }
+    // TODO: transition to follower..
+    if message.term != state.current_term {
+        return;
+    }
+
+    if message.vote_granted {
+        state.voters[peer] = true;
+
+        // have we won?
+        let voters = state.voters.iter().filter(|&v| *v).count();
+        actions.log(format!("Have {} voters", voters));
+        if is_majority(state, voters) {
+            change_mode(state, actions, Mode::Leader);
+        }
+    }
 }
 
 fn handle_heartbeat_timer(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
+    // TODO: test
     send_append_entries(state, actions, peer);
-    actions.set_heartbeat_timer(peer);
 }
 
 fn handle_election_timer(state: &mut RaftState, actions: &mut Actions) {
+    // TODO: test
     match state.mode {
         Mode::Follower => {
             change_mode(state, actions, Mode::Candidate);
@@ -702,6 +759,16 @@ fn prev_log_info(state: &RaftState, next_index: Index) -> (Index, Term) {
     }
 }
 
+/// Determine whether N nodes form a majority of the network
+fn is_majority(state: &RaftState, n: usize) -> bool {
+    // note that this assumes the division operator rounds down, so e.g.,:
+    //  - for a 5-node network, majority means n > 2
+    //  - for a 6-node network, majority means n > 3
+    n > state.network_size / 2
+}
+
+/// Send an AppendEntriesReq to the given peer, based on our stored next_index information,
+/// and reset the heartbeat timer for that peer.
 fn send_append_entries(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
     assert_eq!(state.mode, Mode::Leader);
     let (prev_log_index, prev_log_term) = prev_log_info(state, state.next_index[peer]);
@@ -770,16 +837,18 @@ fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
 fn start_election(state: &mut RaftState, actions: &mut Actions) {
     assert!(state.mode == Mode::Candidate);
 
-    let node_id = state.node_id;
+    // start a new term with only ourselves as a voter
     state.current_term += 1;
-    state.voted_for = Some(node_id);
+    state.voters = [false].repeat(state.network_size);
+    state.voters[state.node_id] = true;
+    state.voted_for = Some(state.node_id);
 
-    let (last_log_index, last_log_term) = prev_log_info(state, state.log.len() as Index);
+    let (last_log_index, last_log_term) = prev_log_info(state, state.log.len() as Index + 1);
 
     for peer in 0..state.network_size {
         let message = Message::RequestVoteReq(RequestVoteReq {
             term: state.current_term,
-            candidate_id: node_id,
+            candidate_id: state.node_id,
             last_log_index,
             last_log_term,
         });
@@ -792,7 +861,7 @@ fn start_election(state: &mut RaftState, actions: &mut Actions) {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::local::{LocalNetwork, LocalNode};
+    use crate::net::local::LocalNetwork;
     use tokio::time::delay_for;
 
     /// Set up for a handler test
@@ -810,6 +879,7 @@ mod test {
             last_applied: 0,
             next_index: [1].repeat(network_size),
             match_index: [0].repeat(network_size),
+            voters: [false].repeat(network_size),
         };
         let mut actions = Actions::new();
         actions.log_prefix = String::from("test");
@@ -1218,29 +1288,36 @@ mod test {
         assert_eq!(actions.actions, vec![]);
     }
 
-    /*
-    #[tokio::test] TODO once we have client responses..
-    async fn replicate_client_call() -> Fallible<()> {
-        let mut net = LocalNetwork::new(2);
-        let mut leader = RaftServer::new(net.take(0));
-        let mut follower = RaftServer::new(net.take(1));
+    mod integration {
+        use super::*;
 
-        leader.add('x').await?;
-        leader.add('y').await?;
+        #[tokio::test]
+        async fn elect_a_leader() -> Fallible<()> {
+            let mut net = LocalNetwork::new(4);
+            let mut servers = vec![
+                RaftServer::new(net.take(0)),
+                RaftServer::new(net.take(1)),
+                RaftServer::new(net.take(2)),
+                RaftServer::new(net.take(3)),
+            ];
 
-        let state = leader.get_state().await?;
-        assert_eq!(state.log.get(1), &LogEntry::new(0, 'x'));
-        assert_eq!(state.log.get(2), &LogEntry::new(0, 'y'));
+            // wait until we get a leader (usually ELECTION_TIMEOUT, sometimes a multiple of that)
+            'leader: loop {
+                for server in &mut servers {
+                    let state = server.get_state().await?;
+                    if state.mode == Mode::Leader {
+                        break 'leader;
+                    }
+                }
 
-        let state = follower.get_state().await?;
-        assert_eq!(state.log.get(1), &LogEntry::new(0, 'x'));
-        assert_eq!(state.log.get(2), &LogEntry::new(0, 'y'));
+                delay_for(Duration::from_millis(100)).await;
+            }
 
-        delay_for(Duration::from_secs(1)).await;
+            for server in servers.drain(..) {
+                server.stop().await;
+            }
 
-        leader.stop().await;
-        follower.stop().await;
-        Ok(())
+            Ok(())
+        }
     }
-    */
 }
