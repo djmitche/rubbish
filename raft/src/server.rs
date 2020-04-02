@@ -554,6 +554,8 @@ fn handle_append_entries_req(
     peer: NodeId,
     message: &AppendEntriesReq,
 ) {
+    update_current_term(state, actions, message.term);
+
     if state.mode == Mode::Leader {
         // leaders don't respond to this message
         return;
@@ -621,23 +623,18 @@ fn handle_append_entries_rep(
     peer: NodeId,
     message: &AppendEntriesRep,
 ) {
+    update_current_term(state, actions, message.term);
+
     if state.mode != Mode::Leader {
         // if we're no longer a leader, there's nothing to do with this response
         return;
-    }
-
-    if message.term > state.current_term {
-        // If the append wasn't successful because another leader has been elected,
-        // then transition back to follower state and acknowledge the new term
-        state.current_term = message.term;
-        change_mode(state, actions, Mode::Follower);
     }
 
     if message.success {
         // If the append was successful, then update next_index and match_index accordingly
         state.next_index[peer] = message.next_index;
         state.match_index[peer] = message.next_index - 1;
-    } else if state.mode == Mode::Leader {
+    } else {
         // If the append wasn't successful because of a log conflict (and we are still leader),
         // select a lower match index for this peer and try again.  The peer sends the index of the
         // first empty slot in the log, but we may need to go back further than that, so decrease
@@ -654,6 +651,8 @@ fn handle_request_vote_req(
     peer: NodeId,
     message: &RequestVoteReq,
 ) {
+    update_current_term(state, actions, message.term);
+
     // TODO: test
     let mut vote_granted = true;
 
@@ -705,6 +704,8 @@ fn handle_request_vote_rep(
     peer: NodeId,
     message: &RequestVoteRep,
 ) {
+    update_current_term(state, actions, message.term);
+
     // TODO: test
     if state.mode != Mode::Candidate {
         // thank you for your vote .. but I'm not running!
@@ -765,6 +766,17 @@ fn is_majority(state: &RaftState, n: usize) -> bool {
     //  - for a 5-node network, majority means n > 2
     //  - for a 6-node network, majority means n > 3
     n > state.network_size / 2
+}
+
+/// Update the current term based on the term in a message, and if not already
+/// a follower, change to that mode.  Returns true if mode was changed.
+fn update_current_term(state: &mut RaftState, actions: &mut Actions, term: Term) {
+    if term > state.current_term {
+        state.current_term = term;
+        if state.mode != Mode::Follower {
+            change_mode(state, actions, Mode::Follower);
+        }
+    }
 }
 
 /// Send an AppendEntriesReq to the given peer, based on our stored next_index information,
@@ -1024,6 +1036,8 @@ mod test {
                 // stop the Candidate election timer..
                 Action::StopElectionTimer,
                 // ..and set a new one as Follower
+                Action::SetElectionTimer,
+                // ..and set it again (simplifies the logic, doesn't hurt..)
                 Action::SetElectionTimer,
                 Action::SendTo(
                     1,
