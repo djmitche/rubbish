@@ -38,7 +38,6 @@ pub struct RaftServer {
  * transient channel to carry the response.
  */
 
-#[derive(Debug)]
 pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     /*
      * Mechanics
@@ -60,6 +59,9 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
 
     /// Raft-related state of the server
     state: RaftState,
+
+    /// Actions on the server (re-used in place)
+    actions: Actions,
 }
 
 /// Control messages sent to the background task
@@ -84,10 +86,10 @@ enum Control {
 #[derive(Debug)]
 enum Timer {
     /// This follower may not have gotten an AppendEntriesReq in a while
-    FollowerUpdate(NodeId),
+    Heartbeat(NodeId),
 
     /// We should start an election
-    CallElection,
+    Election,
 }
 
 /// The current mode of the server
@@ -106,6 +108,9 @@ struct RaftState {
 
     /// Number of nodes in the network
     network_size: usize,
+
+    /// True if the server should stop after this iterataion
+    stop: bool,
 
     /// Current server mode
     mode: Mode,
@@ -190,6 +195,7 @@ impl RaftServer {
             state: RaftState {
                 node_id,
                 network_size,
+                stop: false,
                 mode: Mode::Follower,
                 current_term: 0,
                 current_leader: None,
@@ -200,6 +206,7 @@ impl RaftServer {
                 next_index: [1].repeat(network_size),
                 match_index: [0].repeat(network_size),
             },
+            actions: Actions::new(),
         };
 
         RaftServer {
@@ -239,375 +246,100 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
     // event handling
 
     async fn run(mut self) {
-        loop {
+        #[cfg(test)]
+        {
+            self.actions.set_log_prefix(format!(
+                "server={} mode={:?}",
+                self.state.node_id, self.state.mode
+            ));
+        }
+
+        while !self.state.stop {
             tokio::select! {
-                r = self.control_rx.recv() => {
-                    if let Some(c) = r {
-                        if self.handle_control(c).await.unwrap() {
-                            break;
-                        }
-                    }
-                },
-
-                r = self.node.recv() => {
-                    match r {
-                        Ok((peer, msg)) => self.handle_message(peer, msg).await.unwrap(),
-                        Err(e) => panic!("Error receiving from net: {}", e),
-                    }
-                },
-
-                Some(t) = self.timers.next() => {
-                    self.handle_timer(t.unwrap().into_inner()).await.unwrap();
-                }
+                // TODO: is pattern-matching the right idea here??
+                Some(c) = self.control_rx.recv() => self.handle_control(c),
+                Ok((peer, msg)) = self.node.recv() => self.handle_message(peer, msg),
+                Some(t) = self.timers.next() => self.handle_timer(t.unwrap().into_inner()),
             }
+
+            self.execute_actions().await.unwrap();
         }
     }
 
-    async fn handle_message(&mut self, peer: NodeId, msg: Vec<u8>) -> Fallible<()> {
-        let message: Message = serde_json::from_slice(&msg[..])?;
-        self.log(format!("Handling Message {:?} from {}", message, peer));
+    fn handle_message(&mut self, peer: NodeId, msg: Vec<u8>) {
+        let message: Message = match serde_json::from_slice(&msg[..]) {
+            Ok(m) => m,
+            Err(e) => {
+                self.actions.log(format!("invalid message: {}", e));
+                return;
+            }
+        };
+
+        self.actions
+            .log(format!("Handling Message {:?} from {}", message, peer));
+
         match message {
-            Message::AppendEntriesReq(AppendEntriesReq {
-                term,
-                leader,
-                prev_log_index,
-                prev_log_term,
-                entries,
-                leader_commit,
-            }) => {
-                if self.state.mode == Mode::Leader {
-                    // leaders don't respond to this message
-                    return Ok(());
-                }
-
-                // If we're a follower, then reset the election timeout, as we have just
-                // heard from a real, live leader
-                if self.state.mode == Mode::Follower {
-                    self.start_election_timeout();
-                }
-
-                // Reject this request if term < our current_term
-                let mut success = term >= self.state.current_term;
-
-                // Reject this request if the log does not apply cleanly
-                if success {
-                    success =
-                        match self
-                            .state
-                            .log
-                            .append_entries(prev_log_index, prev_log_term, entries)
-                        {
-                            Ok(()) => true,
-                            Err(_) => false,
-                        };
-                }
-
-                // If the update was successful, so do some bookkeeping:
-                if success {
-                    // TODO: test
-                    if self.state.mode == Mode::Candidate {
-                        // we lost the elction, so transition back to a follower
-                        self.change_mode(Mode::Follower).await?;
-                    }
-
-                    // Update our commit index based on what the leader has told us, but
-                    // not beyond the entries we have received.
-                    if leader_commit > self.state.commit_index {
-                        self.state.commit_index =
-                            cmp::min(leader_commit, self.state.log.len() as Index);
-                    }
-
-                    // Update our current term if this is from a newer leader
-                    self.state.current_term = term;
-                    self.state.current_leader = Some(leader);
-                }
-
-                self.send_to(
-                    peer,
-                    &Message::AppendEntriesRep(AppendEntriesRep {
-                        term: self.state.current_term,
-                        success,
-                        next_index: self.state.log.len() as Index + 1,
-                    }),
-                )
-                .await?;
-
-                Ok(())
+            Message::AppendEntriesReq(ref message) => {
+                handle_append_entries_req(&mut self.state, &mut self.actions, peer, message)
             }
-
             Message::AppendEntriesRep(ref message) => {
-                // TODO: single Actions object per RaftServerInner, clear it on each message?
-                let mut actions = Actions::new();
-                handle_append_entries_rep(&mut self.state, peer, message, &mut actions);
-                self.execute_actions(actions).await?;
-                Ok(())
+                handle_append_entries_rep(&mut self.state, &mut self.actions, peer, message)
             }
-
-            Message::RequestVoteReq(RequestVoteReq {
-                term,
-                candidate_id,
-                last_log_index,
-                last_log_term,
-            }) => {
-                let mut vote_granted = true;
-                // "Reply false if term < currentTerm"
-                if term < self.state.current_term {
-                    vote_granted = false;
-                }
-
-                // "If votedFor is null or canidateId .."
-                if vote_granted {
-                    if let Some(node_id) = self.state.voted_for {
-                        if candidate_id != node_id {
-                            vote_granted = false;
-                        }
-                    }
-                }
-
-                // ".. and candidates's log is at least as up-to-date as receiver's log"
-                // §5.4.1: "Raft determines which of two logs is more up-to-date by comparing
-                // the index and term of the last entries in the logs.  If the logs have last
-                // entries with differen terms, then the log with the later term is more
-                // up-to-date.  If the logs end with the same term, then whichever log is longer is
-                // more up-to-date."
-                if vote_granted {
-                    // TODO: might not have any entries
-                    let receiver_last_log_index = self.state.log.len() as Index;
-                    let receiver_last_log_term = self.state.log.get(receiver_last_log_index).term;
-                    if last_log_term < receiver_last_log_term {
-                        vote_granted = false;
-                    } else if last_log_term == receiver_last_log_term {
-                        if last_log_index < receiver_last_log_index {
-                            vote_granted = false;
-                        }
-                    }
-                }
-
-                self.send_to(
-                    candidate_id,
-                    &Message::RequestVoteRep(RequestVoteRep {
-                        term: self.state.current_term,
-                        vote_granted,
-                    }),
-                )
-                .await?;
-                Ok(())
+            Message::RequestVoteReq(ref message) => {
+                handle_request_vote_req(&mut self.state, &mut self.actions, peer, message)
             }
-            // TODO: XXX HERE
-            // Need to track number of votes for us in a state variable
-            Message::RequestVoteRep(RequestVoteRep { term, vote_granted }) => Ok(()),
+            Message::RequestVoteRep(ref message) => {
+                handle_request_vote_rep(&mut self.state, &mut self.actions, peer, message)
+            }
         }
     }
 
-    async fn handle_timer(&mut self, t: Timer) -> Fallible<()> {
-        self.log(format!("Handling Timer {:?}", t));
+    fn handle_timer(&mut self, t: Timer) {
+        self.actions.log(format!("Handling Timer {:?}", t));
+
         // NOTE: self.timers.remove will panic if called with a key that has already fired.  So
         // we are careful to delete the key before handling any of these timers.
         match t {
-            Timer::FollowerUpdate(node_id) => {
+            Timer::Heartbeat(node_id) => {
                 self.heartbeat_delay[node_id] = None;
-                self.send_append_entries(node_id).await?;
+                handle_heartbeat_timer(&mut self.state, &mut self.actions, node_id);
             }
-            Timer::CallElection => {
+
+            Timer::Election => {
                 self.election_timeout = None;
-                match self.state.mode {
-                    Mode::Follower => {
-                        self.change_mode(Mode::Candidate).await?;
-                    }
-                    Mode::Candidate => {
-                        self.start_election().await?;
-                    }
-                    Mode::Leader => unreachable!(),
-                }
+                handle_election_timer(&mut self.state, &mut self.actions);
             }
         };
-        Ok(())
     }
 
     /// Handle a control message from the main process, and return true if the task should exit
-    async fn handle_control(&mut self, c: Control) -> Fallible<bool> {
-        self.log(format!("Handling Control message {:?}", c));
+    fn handle_control(&mut self, c: Control) {
+        self.actions
+            .log(format!("Handling Control message {:?}", c));
+
         match c {
-            Control::Stop => Ok(true),
+            Control::Stop => self.state.stop = true,
 
-            Control::Add(item) => {
-                if self.state.mode != Mode::Leader {
-                    // TODO: send a reply referring the caller to the leader..
-                    return Ok(false);
-                }
-                let term = self.state.current_term;
-                let entry = LogEntry::new(term, item);
-                let prev_log_index = self.state.log.len() as Index;
-                let prev_log_term = if prev_log_index > 1 {
-                    self.state.log.get(prev_log_index).term
-                } else {
-                    0
-                };
-
-                // append one entry locally (this will always succeed)
-                self.state.log.append_entries(
-                    prev_log_index,
-                    prev_log_term,
-                    vec![entry.clone()],
-                )?;
-
-                // then send AppendEntries to all nodes (including ourselves)
-                for peer in 0..self.node.network_size() {
-                    self.send_append_entries(peer).await?;
-                }
-
-                Ok(false)
-            }
+            Control::Add(item) => handle_control_add(&mut self.state, &mut self.actions, item),
 
             #[cfg(test)]
-            Control::GetState(mut tx) => {
-                tx.send(self.state.clone()).await?;
-                Ok(false)
-            }
+            Control::GetState(tx) => self.actions.send_state(tx),
 
             #[cfg(test)]
-            Control::SetState(state) => {
-                self.state = state;
-                Ok(false)
-            }
+            Control::SetState(state) => self.state = state,
         }
     }
 
-    async fn change_mode(&mut self, new_mode: Mode) -> Fallible<()> {
-        self.log(format!("Transitioning to mode {:?}", new_mode));
-
-        let old_mode = self.state.mode;
-        assert!(old_mode != new_mode);
-        self.state.mode = new_mode;
-
-        // shut down anything running for the old mode..
-        match old_mode {
-            Mode::Follower => {
-                self.stop_election_timeout();
-            }
-            Mode::Candidate => {
-                self.stop_election_timeout();
-            }
-            Mode::Leader => {
-                for delay in &mut self.heartbeat_delay.iter_mut() {
-                    if let Some(k) = delay.take() {
-                        self.timers.remove(&k);
-                    }
-                }
-            }
-        };
-
-        // .. and set up for the new mode
-        match new_mode {
-            Mode::Follower => {
-                self.start_election_timeout();
-            }
-            Mode::Candidate => {
-                self.start_election().await?;
-            }
-            Mode::Leader => {
-                self.state.current_leader = Some(self.node.node_id());
-
-                // re-initialize state tracking other nodes' logs
-                for peer in 0..self.node.network_size() {
-                    self.state.next_index[peer] = self.state.log.len() as Index + 1;
-                    self.state.match_index[peer] = 0;
-                }
-
-                // assert leadership by sending AppendEntriesReq to everyone
-                for peer in 0..self.node.network_size() {
-                    self.send_append_entries(peer).await?;
-                }
-            }
-        };
-
-        Ok(())
-    }
-
-    /// Start a new election, including incrementing term, sending the necessary mesages, and
-    /// starting the election timer.
-    async fn start_election(&mut self) -> Fallible<()> {
-        assert!(self.state.mode == Mode::Candidate);
-
-        let node_id = self.node.node_id();
-        self.state.current_term += 1;
-        self.state.voted_for = Some(node_id);
-
-        let message = Message::RequestVoteReq(RequestVoteReq {
-            term: self.state.current_term,
-            candidate_id: node_id,
-            // TODO: might have no log entries - do this in a utility function?
-            last_log_index: self.state.log.len() as Index,
-            last_log_term: self.state.log.get(self.state.log.len() as Index).term,
-        });
-        for peer in 0..self.node.network_size() {
-            self.send_to(peer, &message).await?;
-        }
-
-        self.start_election_timeout();
-
-        Ok(())
-    }
-
-    // utility functions
-
-    /// Stop the election timeout
-    fn stop_election_timeout(&mut self) {
-        if let Some(k) = self.election_timeout.take() {
-            self.timers.remove(&k);
-        }
-    }
-
-    /// (Re-)start the election_timeout, first removing any existing timeout
-    fn start_election_timeout(&mut self) {
-        self.election_timeout = Some(self.timers.insert(Timer::CallElection, ELECTION_TIMEOUT));
-    }
-
-    /// Send a message to a peer
-    async fn send_to(&mut self, peer: NodeId, message: &Message) -> Fallible<()> {
-        let msg = serde_json::to_vec(message)?;
-        self.node.send(peer, msg).await?;
-        Ok(())
-    }
-
-    /// Send an AppendEntriesReq to the given peer, and additionally update the timer
-    /// so that another (heartbeat) entry is sent soon enough.
-    async fn send_append_entries(&mut self, peer: NodeId) -> Fallible<()> {
-        let prev_log_index = self.state.next_index[peer] - 1;
-        let prev_log_term = if prev_log_index > 1 {
-            self.state.log.get(prev_log_index).term
-        } else {
-            0
-        };
-        let message = Message::AppendEntriesReq(AppendEntriesReq {
-            term: self.state.current_term,
-            leader: self.node.node_id(),
-            prev_log_index,
-            prev_log_term,
-            entries: self.state.log.slice(prev_log_index as usize + 1..).to_vec(),
-            leader_commit: self.state.commit_index,
-        });
-        self.send_to(peer, &message).await?;
-
-        // queue another AppendEntries well before the heartbeat expires
-        if let Some(delay_key) = self.heartbeat_delay[peer].take() {
-            self.timers.remove(&delay_key);
-        }
-        self.heartbeat_delay[peer] =
-            Some(self.timers.insert(Timer::FollowerUpdate(peer), HEARTBEAT));
-
-        Ok(())
-    }
-
-    async fn execute_actions(&mut self, mut actions: Actions) -> Fallible<()> {
-        for action in actions.drain() {
+    /// Execute the actions that a handler function specified.
+    async fn execute_actions(&mut self) -> Fallible<()> {
+        for action in self.actions.drain() {
             match action {
                 Action::SetElectionTimer => {
                     if let Some(k) = self.election_timeout.take() {
                         self.timers.remove(&k);
                     }
                     self.election_timeout =
-                        Some(self.timers.insert(Timer::CallElection, ELECTION_TIMEOUT));
+                        Some(self.timers.insert(Timer::Election, ELECTION_TIMEOUT));
                 }
                 Action::StopElectionTimer => {
                     if let Some(k) = self.election_timeout.take() {
@@ -619,7 +351,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                         self.timers.remove(&delay_key);
                     }
                     self.heartbeat_delay[peer] =
-                        Some(self.timers.insert(Timer::FollowerUpdate(peer), HEARTBEAT));
+                        Some(self.timers.insert(Timer::Heartbeat(peer), HEARTBEAT));
                 }
                 Action::StopHeartbeatTimers => {
                     for delay in &mut self.heartbeat_delay.iter_mut() {
@@ -632,21 +364,13 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     let msg = serde_json::to_vec(&message)?;
                     self.node.send(peer, msg).await?;
                 }
+                #[cfg(test)]
+                Action::SendState(mut tx) => {
+                    tx.send(self.state.clone()).await?;
+                }
             };
         }
         Ok(())
-    }
-
-    // TODO: use a task-local variable?
-    fn log<S: AsRef<str>>(&self, msg: S) {
-        if cfg!(test) && DEBUG {
-            println!(
-                "server={} mode={:?} - {}",
-                self.node.node_id(),
-                self.state.mode,
-                msg.as_ref()
-            );
-        }
     }
 }
 
@@ -661,6 +385,8 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 /// execute_actions method then actually performs the actions.
 struct Actions {
     actions: Vec<Action>,
+    #[cfg(test)]
+    log_prefix: String,
 }
 
 /// See Actions
@@ -679,12 +405,28 @@ enum Action {
 
     /// Send a message to a peer
     SendTo(NodeId, Message),
+
+    /// Send current state via a channel
+    #[cfg(test)]
+    SendState(mpsc::Sender<RaftState>),
 }
 
 impl Actions {
     fn new() -> Actions {
-        Actions { actions: vec![] }
+        Actions {
+            actions: vec![],
+            #[cfg(test)]
+            log_prefix: String::new(),
+        }
     }
+
+    #[cfg(test)]
+    fn set_log_prefix(&mut self, log_prefix: String) {
+        self.log_prefix = log_prefix;
+    }
+
+    #[cfg(not(test))]
+    fn set_log_prefix(&mut self, log_prefix: String) {}
 
     fn drain(&mut self) -> std::vec::Drain<Action> {
         self.actions.drain(..)
@@ -709,17 +451,127 @@ impl Actions {
     fn send_to(&mut self, peer: NodeId, message: Message) {
         self.actions.push(Action::SendTo(peer, message));
     }
+
+    #[cfg(test)]
+    fn send_state(&mut self, tx: mpsc::Sender<RaftState>) {
+        self.actions.push(Action::SendState(tx));
+    }
+
+    /// Not quite an "action", but actions.log will output debug logging (immediately) on
+    /// debug builds when DEBUG is set to true.
+    #[cfg(test)]
+    fn log<S: AsRef<str>>(&self, msg: S) {
+        if DEBUG {
+            println!("{} - {}", self.log_prefix, msg.as_ref());
+        }
+    }
+    #[cfg(not(test))]
+    fn log<S: AsRef<str>>(&self, msg: S) {}
 }
 
 //
 // Event handlers
 //
 
+fn handle_control_add(state: &mut RaftState, actions: &mut Actions, item: char) {
+    if state.mode != Mode::Leader {
+        // TODO: send a reply referring the caller to the leader..
+        return;
+    }
+    let term = state.current_term;
+    let entry = LogEntry::new(term, item);
+    let prev_log_index = state.log.len() as Index;
+    let prev_log_term = if prev_log_index > 1 {
+        state.log.get(prev_log_index).term
+    } else {
+        0
+    };
+
+    // append one entry locally (this will always succeed)
+    state
+        .log
+        .append_entries(prev_log_index, prev_log_term, vec![entry.clone()])
+        .unwrap();
+
+    // then send AppendEntries to all nodes (including ourselves)
+    for peer in 0..state.network_size {
+        send_append_entries(state, actions, peer);
+    }
+}
+
+fn handle_append_entries_req(
+    state: &mut RaftState,
+    actions: &mut Actions,
+    peer: NodeId,
+    message: &AppendEntriesReq,
+) {
+    if state.mode == Mode::Leader {
+        // leaders don't respond to this message
+        return;
+    }
+
+    // If we're a follower, then reset the election timeout, as we have just
+    // heard from a real, live leader
+    if state.mode == Mode::Follower {
+        actions.set_election_timer();
+    }
+
+    // Reject this request if term < our current_term
+    let mut success = message.term >= state.current_term;
+    if !success {
+        actions.log("Rejecting AppendEntries: term too old");
+    }
+
+    // Reject this request if the log does not apply cleanly
+    if success {
+        success = match state.log.append_entries(
+            message.prev_log_index,
+            message.prev_log_term,
+            // TODO: take ref?
+            message.entries.clone(),
+        ) {
+            Ok(()) => true,
+            Err(e) => {
+                actions.log(format!("Rejecting AppendEntries: {}", e));
+                false
+            }
+        };
+    }
+
+    // If the update was successful, so do some bookkeeping:
+    if success {
+        // TODO: test
+        if state.mode == Mode::Candidate {
+            // we lost the elction, so transition back to a follower
+            change_mode(state, actions, Mode::Follower);
+        }
+
+        // Update our commit index based on what the leader has told us, but
+        // not beyond the entries we have received.
+        if message.leader_commit > state.commit_index {
+            state.commit_index = cmp::min(message.leader_commit, state.log.len() as Index);
+        }
+
+        // Update our current term if this is from a newer leader
+        state.current_term = message.term;
+        state.current_leader = Some(message.leader);
+    }
+
+    actions.send_to(
+        peer,
+        Message::AppendEntriesRep(AppendEntriesRep {
+            term: state.current_term,
+            success,
+            next_index: state.log.len() as Index + 1,
+        }),
+    )
+}
+
 fn handle_append_entries_rep(
     state: &mut RaftState,
+    actions: &mut Actions,
     peer: NodeId,
     message: &AppendEntriesRep,
-    actions: &mut Actions,
 ) {
     if state.mode != Mode::Leader {
         // if we're no longer a leader, there's nothing to do with this response
@@ -749,6 +601,83 @@ fn handle_append_entries_rep(
     }
 }
 
+fn handle_request_vote_req(
+    state: &mut RaftState,
+    actions: &mut Actions,
+    peer: NodeId,
+    message: &RequestVoteReq,
+) {
+    let mut vote_granted = true;
+
+    // "Reply false if term < currentTerm"
+    if message.term < state.current_term {
+        vote_granted = false;
+    }
+
+    // "If votedFor is null or canidateId .."
+    if vote_granted {
+        if let Some(node_id) = state.voted_for {
+            if message.candidate_id != node_id {
+                vote_granted = false;
+            }
+        }
+    }
+
+    // ".. and candidates's log is at least as up-to-date as receiver's log"
+    // §5.4.1: "Raft determines which of two logs is more up-to-date by comparing
+    // the index and term of the last entries in the logs.  If the logs have last
+    // entries with differen terms, then the log with the later term is more
+    // up-to-date.  If the logs end with the same term, then whichever log is longer is
+    // more up-to-date."
+    if vote_granted {
+        // TODO: might not have any entries
+        let state_last_log_index = state.log.len() as Index;
+        let receiver_last_log_term = state.log.get(state_last_log_index).term;
+        if message.last_log_term < receiver_last_log_term {
+            vote_granted = false;
+        } else if message.last_log_term == receiver_last_log_term {
+            if message.last_log_index < state_last_log_index {
+                vote_granted = false;
+            }
+        }
+    }
+
+    actions.send_to(
+        peer,
+        Message::RequestVoteRep(RequestVoteRep {
+            term: state.current_term,
+            vote_granted,
+        }),
+    );
+}
+
+fn handle_request_vote_rep(
+    state: &mut RaftState,
+    actions: &mut Actions,
+    peer: NodeId,
+    message: &RequestVoteRep,
+) {
+    // TODO!!
+    // need to track number of votes for us in state
+}
+
+fn handle_heartbeat_timer(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
+    send_append_entries(state, actions, peer);
+    actions.set_heartbeat_timer(peer);
+}
+
+fn handle_election_timer(state: &mut RaftState, actions: &mut Actions) {
+    match state.mode {
+        Mode::Follower => {
+            change_mode(state, actions, Mode::Candidate);
+        }
+        Mode::Candidate => {
+            start_election(state, actions);
+        }
+        Mode::Leader => unreachable!(),
+    }
+}
+
 //
 // Utility functions
 //
@@ -774,8 +703,9 @@ fn send_append_entries(state: &mut RaftState, actions: &mut Actions, peer: NodeI
     actions.set_heartbeat_timer(peer);
 }
 
+/// Change to a new mode, taking care of any necessary state maintenance
 fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
-    //actions.log(format!("Transitioning to mode {:?}", new_mode));
+    actions.log(format!("Transitioning to mode {:?}", new_mode));
 
     let old_mode = state.mode;
     assert!(old_mode != new_mode);
@@ -800,8 +730,7 @@ fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
             actions.set_election_timer();
         }
         Mode::Candidate => {
-            // TODO
-            // actions.start_election().await?;
+            start_election(state, actions);
         }
         Mode::Leader => {
             state.current_leader = Some(state.node_id);
@@ -818,6 +747,29 @@ fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
             }
         }
     };
+}
+
+/// Start a new election, including incrementing term, sending the necessary mesages, and
+/// starting the election timer.
+fn start_election(state: &mut RaftState, actions: &mut Actions) {
+    assert!(state.mode == Mode::Candidate);
+
+    let node_id = state.node_id;
+    state.current_term += 1;
+    state.voted_for = Some(node_id);
+
+    for peer in 0..state.network_size {
+        let message = Message::RequestVoteReq(RequestVoteReq {
+            term: state.current_term,
+            candidate_id: node_id,
+            // TODO: might have no log entries - do this in a utility function?
+            last_log_index: state.log.len() as Index,
+            last_log_term: state.log.get(state.log.len() as Index).term,
+        });
+        actions.send_to(peer, message);
+    }
+
+    actions.set_election_timer();
 }
 
 #[cfg(test)]
