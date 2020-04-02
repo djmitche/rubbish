@@ -407,6 +407,10 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                         }
                     }
                 }
+                Action::ApplyIndex(index) => {
+                    // TODO
+                    println!("Apply {:?}", self.state.log.get(index));
+                }
                 Action::SendTo(peer, message) => {
                     let msg = serde_json::to_vec(&message)?;
                     self.node.send(peer, msg).await?;
@@ -451,6 +455,9 @@ enum Action {
     /// Stop the heartbeat timer for all peers
     StopHeartbeatTimers,
 
+    /// Apply the entry at the given index to the state machine
+    ApplyIndex(Index),
+
     /// Send a message to a peer
     SendTo(NodeId, Message),
 
@@ -493,6 +500,10 @@ impl Actions {
 
     fn stop_heartbeat_timers(&mut self) {
         self.actions.push(Action::StopHeartbeatTimers);
+    }
+
+    fn apply_index(&mut self, index: Index) {
+        self.actions.push(Action::ApplyIndex(index));
     }
 
     fn send_to(&mut self, peer: NodeId, message: Message) {
@@ -600,6 +611,7 @@ fn handle_append_entries_req(
         if message.leader_commit > state.commit_index {
             state.commit_index =
                 cmp::min(message.leader_commit, state.log.last_index().unwrap_or(0));
+            update_commitment(state, actions);
         }
 
         // Update our current term if this is from a newer leader
@@ -634,6 +646,7 @@ fn handle_append_entries_rep(
         // If the append was successful, then update next_index and match_index accordingly
         state.next_index[peer] = message.next_index;
         state.match_index[peer] = message.next_index - 1;
+        update_commitment(state, actions);
     } else {
         // If the append wasn't successful because of a log conflict (and we are still leader),
         // select a lower match index for this peer and try again.  The peer sends the index of the
@@ -869,6 +882,33 @@ fn start_election(state: &mut RaftState, actions: &mut Actions) {
     actions.set_election_timer();
 }
 
+/// Handle any changes to commit_index or match_index, committing and applying log entries
+/// as necessary.
+fn update_commitment(state: &mut RaftState, actions: &mut Actions) {
+    // 'If there exists an N such that N > commitIndex, a majority of matchIndex[i] >= N, and
+    // log[N].term == currentTerm, set commitIndex = N"
+
+    // the median element of match_index is the largest value on which a majority of peers
+    // agree
+    let mut sorted_match_index = state.match_index.clone();
+    sorted_match_index.sort();
+    let majority_index = sorted_match_index[state.network_size / 2 - 1];
+
+    if majority_index > state.commit_index
+        && state.log.get(majority_index).term == state.current_term
+    {
+        actions.log(format!("Increasing commit_index to {}", majority_index));
+        state.commit_index = majority_index;
+    }
+
+    // "If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state
+    // machine"
+    while state.commit_index > state.last_applied {
+        state.last_applied += 1;
+        actions.apply_index(state.last_applied)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -991,6 +1031,7 @@ mod test {
             actions.actions,
             vec![
                 Action::SetElectionTimer,
+                Action::ApplyIndex(1),
                 Action::SendTo(
                     1,
                     Message::AppendEntriesRep(AppendEntriesRep {
@@ -1038,6 +1079,7 @@ mod test {
                 Action::SetElectionTimer,
                 // ..and set it again (simplifies the logic, doesn't hurt..)
                 Action::SetElectionTimer,
+                Action::ApplyIndex(1),
                 Action::SendTo(
                     1,
                     Message::AppendEntriesRep(AppendEntriesRep {
