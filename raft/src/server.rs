@@ -1,16 +1,20 @@
+use crate::diststate::{self, DistributedState, Request};
 use crate::log::{LogEntry, RaftLog};
 use crate::net::{NodeId, RaftNetworkNode};
 use crate::{Index, Term};
 use failure::Fallible;
 use rand::{thread_rng, Rng};
-use serde::{Deserialize, Serialize};
+use serde_json::{self, json};
 use std::cmp;
 use std::iter;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::{delay_queue, DelayQueue};
+
+#[cfg(test)]
+use std::time::SystemTime;
 
 /// Set this to true to enable lots of println!
 const DEBUG: bool = true;
@@ -29,15 +33,18 @@ const HEARTBEAT: Duration = Duration::from_millis(200);
 
 /// A RaftServer represents a running server participating in a Raft.
 #[derive(Debug)]
-pub struct RaftServer {
+pub struct RaftServer<DS>
+where
+    DS: DistributedState,
+{
     /// The background task receiving messages for this server
     task: task::JoinHandle<()>,
 
     /// A channel to send control messages to the background task
-    control_tx: mpsc::Sender<Control>,
+    control_tx: mpsc::Sender<Control<DS>>,
 
     /// A channel to receive control messages from the background task
-    control_rx: mpsc::Receiver<Control>,
+    control_rx: mpsc::Receiver<Control<DS>>,
 }
 
 /* Most of the work of a server occurs in a background task, reacting to messages and timers.  In
@@ -47,18 +54,22 @@ pub struct RaftServer {
  * transient channel to carry the response.
  */
 
-pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
+pub struct RaftServerInner<NODE, DS>
+where
+    NODE: RaftNetworkNode + Sync + Send + 'static,
+    DS: DistributedState,
+{
     /*
      * Mechanics
      */
     /// The network node, used for communication
-    node: N,
+    node: NODE,
 
     /// Channel containing control messages from other tasks
-    control_rx: mpsc::Receiver<Control>,
+    control_rx: mpsc::Receiver<Control<DS>>,
 
     /// Channel for sending control information back to other tasks
-    control_tx: mpsc::Sender<Control>,
+    control_tx: mpsc::Sender<Control<DS>>,
 
     /// A queue of Timer objects
     timers: DelayQueue<Timer>,
@@ -70,20 +81,23 @@ pub struct RaftServerInner<N: RaftNetworkNode + Sync + Send + 'static> {
     election_timeout: Option<delay_queue::Key>,
 
     /// Raft-related state of the server
-    state: RaftState,
+    state: RaftState<DS>,
 
     /// Actions on the server (re-used in place)
-    actions: Actions,
+    actions: Actions<DS>,
 }
 
 /// Control messages sent between RaftServer and RaftServerInner
 #[derive(Debug, PartialEq)]
-enum Control {
+enum Control<DS>
+where
+    DS: DistributedState,
+{
     /// (server -> inner) Stop the task
     Stop,
 
-    /// (server -> inner) Add a new entry
-    Add(char),
+    /// (server -> inner) Client Request to the state machine
+    Request(DS::Request),
 
     /// (server -> inner) Send a SetState back containing the current state
     #[cfg(test)]
@@ -92,7 +106,7 @@ enum Control {
     /// (server -> inner) Set the current raft state;
     /// (inner -> server) reply to GetState
     #[cfg(test)]
-    SetState(RaftState),
+    SetState(RaftState<DS>),
 }
 
 /// A Timer is an event that is scheduled at some future time.
@@ -115,7 +129,10 @@ enum Mode {
 
 /// Raft-related state of the server
 #[derive(Debug, Clone, PartialEq)]
-struct RaftState {
+struct RaftState<DS>
+where
+    DS: DistributedState,
+{
     /// This node
     node_id: NodeId,
 
@@ -138,7 +155,7 @@ struct RaftState {
     voted_for: Option<NodeId>,
 
     /// The log entries
-    log: RaftLog<char>,
+    log: RaftLog<LogItem<DS::Request>>,
 
     /// Index of the highest log entry known to be committed
     commit_index: Index,
@@ -156,24 +173,27 @@ struct RaftState {
     voters: Vec<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
-struct AppendEntriesReq {
+#[derive(Debug, PartialEq, Default)]
+struct AppendEntriesReq<DS>
+where
+    DS: DistributedState,
+{
     term: Term,
     leader: NodeId,
     prev_log_index: Index,
     prev_log_term: Term,
-    entries: Vec<LogEntry<char>>,
+    entries: Vec<LogEntry<LogItem<DS::Request>>>,
     leader_commit: Index,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 struct AppendEntriesRep {
     term: Term,
     next_index: Index,
     success: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 struct RequestVoteReq {
     term: Term,
     candidate_id: NodeId,
@@ -181,24 +201,145 @@ struct RequestVoteReq {
     last_log_term: Term,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 struct RequestVoteRep {
     term: Term,
     vote_granted: bool,
 }
 
 /// Messages transferred between Raft nodes
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type")]
-enum Message {
-    AppendEntriesReq(AppendEntriesReq),
+#[derive(Debug, PartialEq)]
+enum Message<DS>
+where
+    DS: DistributedState,
+{
+    AppendEntriesReq(AppendEntriesReq<DS>),
     AppendEntriesRep(AppendEntriesRep),
     RequestVoteReq(RequestVoteReq),
     RequestVoteRep(RequestVoteRep),
 }
 
-impl RaftServer {
-    pub fn new<N: RaftNetworkNode + Sync + Send + 'static>(node: N) -> RaftServer {
+impl<DS> Message<DS>
+where
+    DS: DistributedState,
+{
+    fn serialize(&self) -> Vec<u8> {
+        let value = match *self {
+            Message::AppendEntriesReq(ref v) => {
+                let entries: Vec<serde_json::Value> = v
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        json!({
+                            "term": e.term,
+                            "item_req":e.item.req.serialize(),
+                        })
+                    })
+                    .collect();
+
+                json!({
+                    "type": "AppendEntriesReq",
+                    "term": v.term,
+                    "leader": v.leader,
+                    "prev_log_index": v.prev_log_index,
+                    "prev_log_term": v.prev_log_term,
+                    "entries": entries,
+                    "leader_commit": v.leader_commit,
+                })
+            }
+            Message::AppendEntriesRep(ref v) => json!( {
+                "type": "AppendEntriesRep",
+                "term": v.term,
+                "next_index": v.next_index,
+                "success": v.success,
+            }),
+            Message::RequestVoteReq(ref v) => json!({
+                "type": "RequestVoteReq",
+                "term": v.term,
+                "candidate_id": v.candidate_id,
+                "last_log_index": v.last_log_index,
+                "last_log_term": v.last_log_term,
+            }),
+            Message::RequestVoteRep(ref v) => json!({
+                "type": "RequestVoteRep",
+                "term": v.term,
+                "vote_granted": v.vote_granted,
+            }),
+        };
+        // TODO: better way??
+        value.to_string().as_bytes().to_vec()
+    }
+
+    fn deserialize(ser: &[u8]) -> Self {
+        let value: serde_json::Value =
+            serde_json::from_str(std::str::from_utf8(ser).unwrap()).unwrap();
+        let typ = value.get("type").unwrap().as_str().unwrap();
+        match typ {
+            "AppendEntriesReq" => {
+                let entries = value
+                    .get("entries")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| {
+                        let term = e.get("term").unwrap().as_u64().unwrap();
+                        let item_req = e.get("item_req").unwrap();
+                        LogEntry {
+                            term,
+                            item: LogItem {
+                                req: <DS as diststate::DistributedState>::Request::deserialize(
+                                    item_req,
+                                ),
+                            },
+                        }
+                    })
+                    .collect();
+                Message::AppendEntriesReq(AppendEntriesReq {
+                    term: value.get("term").unwrap().as_u64().unwrap(),
+                    leader: value.get("leader").unwrap().as_u64().unwrap() as usize,
+                    prev_log_index: value.get("prev_log_index").unwrap().as_u64().unwrap(),
+                    prev_log_term: value.get("prev_log_term").unwrap().as_u64().unwrap(),
+                    entries,
+                    leader_commit: value.get("leader_commit").unwrap().as_u64().unwrap(),
+                })
+            }
+            "AppendEntriesRep" => Message::AppendEntriesRep(AppendEntriesRep {
+                term: value.get("term").unwrap().as_u64().unwrap(),
+                next_index: value.get("next_index").unwrap().as_u64().unwrap(),
+                success: value.get("success").unwrap().as_bool().unwrap(),
+            }),
+            "RequestVoteReq" => Message::RequestVoteReq(RequestVoteReq {
+                term: value.get("term").unwrap().as_u64().unwrap(),
+                candidate_id: value.get("candidate_id").unwrap().as_u64().unwrap() as usize,
+                last_log_index: value.get("last_log_index").unwrap().as_u64().unwrap(),
+                last_log_term: value.get("last_log_term").unwrap().as_u64().unwrap(),
+            }),
+            "RequestVoteRep" => Message::RequestVoteRep(RequestVoteRep {
+                term: value.get("term").unwrap().as_u64().unwrap(),
+                vote_granted: value.get("vote_granted").unwrap().as_bool().unwrap(),
+            }),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LogItem<R>
+where
+    R: diststate::Request,
+{
+    req: R,
+}
+
+impl<DS> RaftServer<DS>
+where
+    DS: DistributedState + Clone,
+{
+    pub fn new<NODE>(node: NODE) -> RaftServer<DS>
+    where
+        NODE: RaftNetworkNode + Sync + Send + 'static,
+    {
         let (control_tx_in, control_rx_in) = mpsc::channel(1);
         let (control_tx_out, control_rx_out) = mpsc::channel(1);
         let node_id = node.node_id();
@@ -241,14 +382,14 @@ impl RaftServer {
         self.task.await.unwrap();
     }
 
-    /// Add an entry to the log on the leader
-    pub async fn add(&mut self, item: char) -> Fallible<()> {
-        Ok(self.control_tx.send(Control::Add(item)).await?)
+    /// Make a request of the distributed state machine
+    pub async fn request(&mut self, req: DS::Request) -> Fallible<()> {
+        Ok(self.control_tx.send(Control::Request(req)).await?)
     }
 
     /// Get a copy of the current server state (for testing)
     #[cfg(test)]
-    async fn get_state(&mut self) -> Fallible<RaftState> {
+    async fn get_state(&mut self) -> Fallible<RaftState<DS>> {
         self.control_tx.send(Control::GetState).await?;
         if let Control::SetState(state) = self.control_rx.recv().await.unwrap() {
             return Ok(state);
@@ -259,13 +400,17 @@ impl RaftServer {
 
     /// Set the current server state (for testing)
     #[cfg(test)]
-    async fn set_state(&mut self, state: RaftState) -> Fallible<()> {
+    async fn set_state(&mut self, state: RaftState<DS>) -> Fallible<()> {
         self.control_tx.send(Control::SetState(state)).await?;
         Ok(())
     }
 }
 
-impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
+impl<NODE, DS> RaftServerInner<NODE, DS>
+where
+    NODE: RaftNetworkNode + Sync + Send + 'static,
+    DS: DistributedState,
+{
     // event handling
 
     async fn run(mut self) {
@@ -307,13 +452,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
     }
 
     fn handle_message(&mut self, peer: NodeId, msg: Vec<u8>) {
-        let message: Message = match serde_json::from_slice(&msg[..]) {
-            Ok(m) => m,
-            Err(e) => {
-                self.actions.log(format!("invalid message: {}", e));
-                return;
-            }
-        };
+        let message: Message<DS> = Message::deserialize(&msg);
 
         self.actions
             .log(format!("Handling Message {:?} from {}", message, peer));
@@ -353,14 +492,14 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
     }
 
     /// Handle a control message from the main process, and return true if the task should exit
-    fn handle_control(&mut self, c: Control) {
+    fn handle_control(&mut self, c: Control<DS>) {
         self.actions
             .log(format!("Handling Control message {:?}", c));
 
         match c {
             Control::Stop => self.state.stop = true,
 
-            Control::Add(item) => handle_control_add(&mut self.state, &mut self.actions, item),
+            Control::Request(req) => handle_control_add(&mut self.state, &mut self.actions, req),
 
             #[cfg(test)]
             Control::GetState => handle_control_get_state(&mut self.state, &mut self.actions),
@@ -412,7 +551,7 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
                     println!("Apply {:?}", self.state.log.get(index));
                 }
                 Action::SendTo(peer, message) => {
-                    let msg = serde_json::to_vec(&message)?;
+                    let msg = message.serialize();
                     self.node.send(peer, msg).await?;
                 }
                 Action::SendControl(control) => {
@@ -434,15 +573,21 @@ impl<N: RaftNetworkNode + Sync + Send + 'static> RaftServerInner<N> {
 /// The struct provides convenience functions to add an action; the RaftServerInner's
 /// execute_actions method then actually performs the actions.
 #[derive(Debug, PartialEq)]
-struct Actions {
-    actions: Vec<Action>,
+struct Actions<DS>
+where
+    DS: DistributedState,
+{
+    actions: Vec<Action<DS>>,
     #[cfg(test)]
     log_prefix: String,
 }
 
 /// See Actions
 #[derive(Debug, PartialEq)]
-enum Action {
+enum Action<DS>
+where
+    DS: DistributedState,
+{
     /// Start the election_timeout timer (resetting any existing timer)
     SetElectionTimer,
 
@@ -459,14 +604,17 @@ enum Action {
     ApplyIndex(Index),
 
     /// Send a message to a peer
-    SendTo(NodeId, Message),
+    SendTo(NodeId, Message<DS>),
 
     /// Send a message on the control channel
-    SendControl(Control),
+    SendControl(Control<DS>),
 }
 
-impl Actions {
-    fn new() -> Actions {
+impl<DS> Actions<DS>
+where
+    DS: DistributedState,
+{
+    fn new() -> Actions<DS> {
         Actions {
             actions: vec![],
             #[cfg(test)]
@@ -482,7 +630,7 @@ impl Actions {
     #[cfg(not(test))]
     fn set_log_prefix(&mut self, log_prefix: String) {}
 
-    fn drain(&mut self) -> std::vec::Drain<Action> {
+    fn drain(&mut self) -> std::vec::Drain<Action<DS>> {
         self.actions.drain(..)
     }
 
@@ -506,11 +654,11 @@ impl Actions {
         self.actions.push(Action::ApplyIndex(index));
     }
 
-    fn send_to(&mut self, peer: NodeId, message: Message) {
+    fn send_to(&mut self, peer: NodeId, message: Message<DS>) {
         self.actions.push(Action::SendTo(peer, message));
     }
 
-    fn send_control(&mut self, control: Control) {
+    fn send_control(&mut self, control: Control<DS>) {
         self.actions.push(Action::SendControl(control));
     }
 
@@ -534,12 +682,15 @@ impl Actions {
 // Event handlers
 //
 
-fn handle_control_add(state: &mut RaftState, actions: &mut Actions, item: char) {
+fn handle_control_add<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>, req: DS::Request)
+where
+    DS: DistributedState,
+{
     if state.mode != Mode::Leader {
         // TODO: send a reply referring the caller to the leader..
         return;
     }
-    let entry = LogEntry::new(state.current_term, item);
+    let entry = LogEntry::new(state.current_term, LogItem { req });
     let (prev_log_index, prev_log_term) = prev_log_info(state, state.log.next_index());
 
     // append one entry locally (this will always succeed)
@@ -555,16 +706,21 @@ fn handle_control_add(state: &mut RaftState, actions: &mut Actions, item: char) 
 }
 
 #[cfg(test)]
-fn handle_control_get_state(state: &mut RaftState, actions: &mut Actions) {
+fn handle_control_get_state<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>)
+where
+    DS: DistributedState,
+{
     actions.send_control(Control::SetState(state.clone()));
 }
 
-fn handle_append_entries_req(
-    state: &mut RaftState,
-    actions: &mut Actions,
+fn handle_append_entries_req<DS>(
+    state: &mut RaftState<DS>,
+    actions: &mut Actions<DS>,
     peer: NodeId,
-    message: &AppendEntriesReq,
-) {
+    message: &AppendEntriesReq<DS>,
+) where
+    DS: DistributedState,
+{
     update_current_term(state, actions, message.term);
 
     if state.mode == Mode::Leader {
@@ -629,12 +785,14 @@ fn handle_append_entries_req(
     )
 }
 
-fn handle_append_entries_rep(
-    state: &mut RaftState,
-    actions: &mut Actions,
+fn handle_append_entries_rep<DS>(
+    state: &mut RaftState<DS>,
+    actions: &mut Actions<DS>,
     peer: NodeId,
     message: &AppendEntriesRep,
-) {
+) where
+    DS: DistributedState,
+{
     update_current_term(state, actions, message.term);
 
     if state.mode != Mode::Leader {
@@ -658,12 +816,14 @@ fn handle_append_entries_rep(
     }
 }
 
-fn handle_request_vote_req(
-    state: &mut RaftState,
-    actions: &mut Actions,
+fn handle_request_vote_req<DS>(
+    state: &mut RaftState<DS>,
+    actions: &mut Actions<DS>,
     peer: NodeId,
     message: &RequestVoteReq,
-) {
+) where
+    DS: DistributedState,
+{
     update_current_term(state, actions, message.term);
 
     // TODO: test
@@ -709,12 +869,14 @@ fn handle_request_vote_req(
     );
 }
 
-fn handle_request_vote_rep(
-    state: &mut RaftState,
-    actions: &mut Actions,
+fn handle_request_vote_rep<DS>(
+    state: &mut RaftState<DS>,
+    actions: &mut Actions<DS>,
     peer: NodeId,
     message: &RequestVoteRep,
-) {
+) where
+    DS: DistributedState,
+{
     update_current_term(state, actions, message.term);
 
     // TODO: test
@@ -740,12 +902,18 @@ fn handle_request_vote_rep(
     }
 }
 
-fn handle_heartbeat_timer(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
+fn handle_heartbeat_timer<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>, peer: NodeId)
+where
+    DS: DistributedState,
+{
     // TODO: test
     send_append_entries(state, actions, peer);
 }
 
-fn handle_election_timer(state: &mut RaftState, actions: &mut Actions) {
+fn handle_election_timer<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>)
+where
+    DS: DistributedState,
+{
     // TODO: test
     match state.mode {
         Mode::Follower => {
@@ -764,7 +932,10 @@ fn handle_election_timer(state: &mut RaftState, actions: &mut Actions) {
 
 /// Calculate prev_log_index and prev_log_term based on the given next_index.  This handles
 /// the boundary condition of next_index == 1
-fn prev_log_info(state: &RaftState, next_index: Index) -> (Index, Term) {
+fn prev_log_info<DS>(state: &RaftState<DS>, next_index: Index) -> (Index, Term)
+where
+    DS: DistributedState,
+{
     if next_index == 1 {
         (0, 0)
     } else {
@@ -773,7 +944,10 @@ fn prev_log_info(state: &RaftState, next_index: Index) -> (Index, Term) {
 }
 
 /// Determine whether N nodes form a majority of the network
-fn is_majority(state: &RaftState, n: usize) -> bool {
+fn is_majority<DS>(state: &RaftState<DS>, n: usize) -> bool
+where
+    DS: DistributedState,
+{
     // note that this assumes the division operator rounds down, so e.g.,:
     //  - for a 5-node network, majority means n > 2
     //  - for a 6-node network, majority means n > 3
@@ -782,7 +956,10 @@ fn is_majority(state: &RaftState, n: usize) -> bool {
 
 /// Update the current term based on the term in a message, and if not already
 /// a follower, change to that mode.  Returns true if mode was changed.
-fn update_current_term(state: &mut RaftState, actions: &mut Actions, term: Term) {
+fn update_current_term<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>, term: Term)
+where
+    DS: DistributedState,
+{
     if term > state.current_term {
         state.current_term = term;
         if state.mode != Mode::Follower {
@@ -793,7 +970,10 @@ fn update_current_term(state: &mut RaftState, actions: &mut Actions, term: Term)
 
 /// Send an AppendEntriesReq to the given peer, based on our stored next_index information,
 /// and reset the heartbeat timer for that peer.
-fn send_append_entries(state: &mut RaftState, actions: &mut Actions, peer: NodeId) {
+fn send_append_entries<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>, peer: NodeId)
+where
+    DS: DistributedState,
+{
     assert_eq!(state.mode, Mode::Leader);
     let (prev_log_index, prev_log_term) = prev_log_info(state, state.next_index[peer]);
     let message = Message::AppendEntriesReq(AppendEntriesReq {
@@ -811,7 +991,10 @@ fn send_append_entries(state: &mut RaftState, actions: &mut Actions, peer: NodeI
 }
 
 /// Change to a new mode, taking care of any necessary state maintenance
-fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
+fn change_mode<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>, new_mode: Mode)
+where
+    DS: DistributedState,
+{
     actions.log(format!("Transitioning to mode {:?}", new_mode));
 
     let old_mode = state.mode;
@@ -858,7 +1041,10 @@ fn change_mode(state: &mut RaftState, actions: &mut Actions, new_mode: Mode) {
 
 /// Start a new election, including incrementing term, sending the necessary mesages, and
 /// starting the election timer.
-fn start_election(state: &mut RaftState, actions: &mut Actions) {
+fn start_election<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>)
+where
+    DS: DistributedState,
+{
     assert!(state.mode == Mode::Candidate);
 
     // start a new term with only ourselves as a voter
@@ -884,7 +1070,10 @@ fn start_election(state: &mut RaftState, actions: &mut Actions) {
 
 /// Handle any changes to commit_index or match_index, committing and applying log entries
 /// as necessary.
-fn update_commitment(state: &mut RaftState, actions: &mut Actions) {
+fn update_commitment<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>)
+where
+    DS: DistributedState,
+{
     // 'If there exists an N such that N > commitIndex, a majority of matchIndex[i] >= N, and
     // log[N].term == currentTerm, set commitIndex = N"
 
@@ -913,10 +1102,48 @@ fn update_commitment(state: &mut RaftState, actions: &mut Actions) {
 mod test {
     use super::*;
     use crate::net::local::LocalNetwork;
-    use tokio::time::delay_for;
+    use serde::{Deserialize, Serialize};
+
+    use crate::diststate::{self, DistributedState};
+
+    /// TestState just stores a string.  Requests change it.  It's easy.
+    #[derive(Clone, PartialEq, Debug)]
+    pub struct TestState(String);
+
+    #[derive(PartialEq, Debug, Clone, Default)]
+    pub struct Request(String);
+
+    impl diststate::Request for Request {
+        fn serialize(&self) -> serde_json::Value {
+            self.0.clone().into()
+        }
+        fn deserialize(ser: &serde_json::Value) -> Self {
+            Self(ser.as_str().unwrap().to_owned())
+        }
+    }
+
+    /// Response to a Request
+    #[derive(PartialEq, Debug, Clone, Default)]
+    pub struct Response(String);
+
+    impl diststate::Response for Response {}
+
+    impl DistributedState for TestState {
+        type Request = Request;
+        type Response = Response;
+
+        fn new() -> Self {
+            Self("Empty".into())
+        }
+
+        fn dispatch(mut self, request: Request) -> (Self, Response) {
+            self.0 = request.0;
+            (self.clone(), Response(self.0))
+        }
+    }
 
     /// Set up for a handler test
-    fn setup(network_size: usize) -> (RaftState, Actions) {
+    fn setup(network_size: usize) -> (RaftState<TestState>, Actions<TestState>) {
         let state = RaftState {
             node_id: 0,
             network_size,
@@ -937,11 +1164,22 @@ mod test {
         (state, actions)
     }
 
+    /// Shorthand for making a client request
+    fn request<S: Into<String>>(s: S) -> Request {
+        Request(s.into())
+    }
+
+    /// Shorthand for making a log entry
+    fn logentry(term: Term, item: &str) -> LogEntry<LogItem<Request>> {
+        let req = request(item);
+        LogEntry::new(term, LogItem { req })
+    }
+
     /// Shorthand for making a vector of log entries
-    fn logentries(tuples: Vec<(Term, char)>) -> Vec<LogEntry<char>> {
+    fn logentries(tuples: Vec<(Term, &str)>) -> Vec<LogEntry<LogItem<Request>>> {
         let mut entries = vec![];
         for (t, i) in tuples {
-            entries.push(LogEntry::new(t, i));
+            entries.push(logentry(t, i));
         }
         entries
     }
@@ -952,42 +1190,41 @@ mod test {
         state.mode = Mode::Leader;
         state.current_term = 2;
         state.next_index[1] = 2;
-        state.log.add(LogEntry::new(1, 'a'));
+        state.log.add(logentry(1, "a"));
 
-        handle_control_add(&mut state, &mut actions, 'x');
+        handle_control_add(&mut state, &mut actions, request("x"));
 
         assert_eq!(state.log.len(), 2);
-        assert_eq!(state.log.get(2), &LogEntry::new(2, 'x'));
-        assert_eq!(
-            actions.actions,
-            vec![
-                Action::SendTo(
-                    0,
-                    Message::AppendEntriesReq(AppendEntriesReq {
-                        term: 2,
-                        leader: 0,
-                        prev_log_index: 0,
-                        prev_log_term: 0,
-                        entries: logentries(vec![(1, 'a'), (2, 'x')]),
-                        leader_commit: 0
-                    })
-                ),
-                Action::SetHeartbeatTimer(0),
-                Action::SendTo(
-                    1,
-                    Message::AppendEntriesReq(AppendEntriesReq {
-                        term: 2,
-                        leader: 0,
-                        // only appends one entry, as next_index was 2 for this peer
-                        prev_log_index: 1,
-                        prev_log_term: 1,
-                        entries: logentries(vec![(2, 'x')]),
-                        leader_commit: 0
-                    })
-                ),
-                Action::SetHeartbeatTimer(1),
-            ]
+        assert_eq!(state.log.get(2), &logentry(2, "x"));
+
+        let mut expected: Actions<TestState> = Actions::new();
+        expected.send_to(
+            0,
+            Message::AppendEntriesReq(AppendEntriesReq {
+                term: 2,
+                leader: 0,
+                prev_log_index: 0,
+                prev_log_term: 0,
+                entries: logentries(vec![(1, "a"), (2, "x")]),
+                leader_commit: 0,
+            }),
         );
+        expected.set_heartbeat_timer(0);
+        expected.send_to(
+            1,
+            Message::AppendEntriesReq(AppendEntriesReq {
+                term: 2,
+                leader: 0,
+                // only appends one entry, as next_index was 2 for this peer
+                prev_log_index: 1,
+                prev_log_term: 1,
+                entries: logentries(vec![(2, "x")]),
+                leader_commit: 0,
+            }),
+        );
+        expected.set_heartbeat_timer(1);
+
+        assert_eq!(actions.actions, expected.actions);
     }
 
     #[test]
@@ -995,7 +1232,7 @@ mod test {
         let (mut state, mut actions) = setup(2);
         state.mode = Mode::Follower;
 
-        handle_control_add(&mut state, &mut actions, 'x');
+        handle_control_add(&mut state, &mut actions, request("x"));
 
         assert_eq!(state.log.len(), 0);
         assert_eq!(actions.actions, vec![]);
@@ -1005,7 +1242,7 @@ mod test {
     fn test_append_entries_req_success() {
         let (mut state, mut actions) = setup(2);
         state.mode = Mode::Follower;
-        state.log.add(LogEntry::new(1, 'a'));
+        state.log.add(logentry(1, "a"));
         state.current_term = 7;
 
         handle_append_entries_req(
@@ -1017,13 +1254,13 @@ mod test {
                 leader: 1,
                 prev_log_index: 1,
                 prev_log_term: 1,
-                entries: logentries(vec![(7, 'x')]),
+                entries: logentries(vec![(7, "x")]),
                 leader_commit: 1,
             },
         );
 
         assert_eq!(state.log.len(), 2);
-        assert_eq!(state.log.get(2), &LogEntry::new(7, 'x'));
+        assert_eq!(state.log.get(2), &logentry(7, "x"));
         assert_eq!(state.commit_index, 1);
         assert_eq!(state.current_term, 7);
         assert_eq!(state.current_leader, Some(1));
@@ -1048,7 +1285,7 @@ mod test {
     fn test_append_entries_req_success_as_candidate_lost_election() {
         let (mut state, mut actions) = setup(2);
         state.mode = Mode::Candidate;
-        state.log.add(LogEntry::new(1, 'a'));
+        state.log.add(logentry(1, "a"));
         state.current_term = 3;
 
         handle_append_entries_req(
@@ -1104,7 +1341,11 @@ mod test {
             1,
             &AppendEntriesReq {
                 term: 3,
-                ..Default::default()
+                leader: 0,
+                prev_log_index: 1,
+                prev_log_term: 1,
+                entries: vec![],
+                leader_commit: 4,
             },
         );
 
@@ -1138,10 +1379,11 @@ mod test {
             1,
             &AppendEntriesReq {
                 term: 7,
+                leader: 0,
                 prev_log_index: 5,
                 prev_log_term: 7,
                 entries: vec![],
-                ..Default::default()
+                leader_commit: 0,
             },
         );
 
@@ -1173,7 +1415,12 @@ mod test {
             &mut actions,
             1,
             &AppendEntriesReq {
-                ..Default::default()
+                term: 0,
+                leader: 0,
+                prev_log_index: 0,
+                prev_log_term: 0,
+                entries: vec![],
+                leader_commit: 0,
             },
         );
 
@@ -1191,9 +1438,9 @@ mod test {
             &mut actions,
             1,
             &AppendEntriesRep {
+                term: 0,
                 next_index: 3,
                 success: true,
-                ..Default::default()
             },
         );
 
@@ -1206,8 +1453,8 @@ mod test {
     fn test_append_entries_rep_not_success_decrement() {
         let (mut state, mut actions) = setup(2);
         state.mode = Mode::Leader;
-        state.log.add(LogEntry::new(1, 'a'));
-        state.log.add(LogEntry::new(1, 'b'));
+        state.log.add(logentry(1, "a"));
+        state.log.add(logentry(1, "b"));
         state.next_index[1] = 2;
 
         handle_append_entries_rep(
@@ -1215,9 +1462,9 @@ mod test {
             &mut actions,
             1,
             &AppendEntriesRep {
+                term: 0,
                 next_index: 2, // peer claims it has one entry that didn't match
                 success: false,
-                ..Default::default()
             },
         );
 
@@ -1233,7 +1480,7 @@ mod test {
                         leader: 0,
                         prev_log_index: 0,
                         prev_log_term: 0,
-                        entries: logentries(vec![(1, 'a'), (1, 'b')]),
+                        entries: logentries(vec![(1, "a"), (1, "b")]),
                         leader_commit: 0
                     })
                 ),
@@ -1246,10 +1493,10 @@ mod test {
     fn test_append_entries_rep_not_success_supplied_next_index() {
         let (mut state, mut actions) = setup(2);
         state.mode = Mode::Leader;
-        state.log.add(LogEntry::new(1, 'a'));
-        state.log.add(LogEntry::new(2, 'b'));
-        state.log.add(LogEntry::new(2, 'c'));
-        state.log.add(LogEntry::new(2, 'd'));
+        state.log.add(logentry(1, "a"));
+        state.log.add(logentry(2, "b"));
+        state.log.add(logentry(2, "c"));
+        state.log.add(logentry(2, "d"));
         state.next_index[1] = 4;
 
         handle_append_entries_rep(
@@ -1257,9 +1504,9 @@ mod test {
             &mut actions,
             1,
             &AppendEntriesRep {
+                term: 0,
                 next_index: 2, // peer says it has one entry
                 success: false,
-                ..Default::default()
             },
         );
 
@@ -1275,7 +1522,7 @@ mod test {
                         leader: 0,
                         prev_log_index: 1,
                         prev_log_term: 1,
-                        entries: logentries(vec![(2, 'b'), (2, 'c'), (2, 'd')]),
+                        entries: logentries(vec![(2, "b"), (2, "c"), (2, "d")]),
                         leader_commit: 0
                     })
                 ),
@@ -1296,8 +1543,8 @@ mod test {
             1,
             &AppendEntriesRep {
                 term: 5,
+                next_index: 0,
                 success: false,
-                ..Default::default()
             },
         );
 
@@ -1319,7 +1566,9 @@ mod test {
             &mut actions,
             1,
             &AppendEntriesRep {
-                ..Default::default()
+                term: 0,
+                next_index: 0,
+                success: false,
             },
         );
 
@@ -1336,7 +1585,9 @@ mod test {
             &mut actions,
             1,
             &AppendEntriesRep {
-                ..Default::default()
+                term: 0,
+                next_index: 0,
+                success: false,
             },
         );
 
@@ -1346,10 +1597,87 @@ mod test {
     mod integration {
         use super::*;
 
+        use crate::diststate::{self, DistributedState};
+        use crate::net::local::{LocalNetwork, LocalNode};
+        use std::collections::HashMap;
+        use tokio::time::delay_for;
+
+        #[derive(Clone, PartialEq, Debug)]
+        pub struct TestState(HashMap<String, String>);
+
+        /// Clients send Request objects (JSON-encoded) to the server.
+        #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+        pub struct Request {
+            /// Operation: one of get, set, or delete
+            pub op: String,
+
+            /// key to get, set, or delete
+            pub key: String,
+
+            /// value to set (ignored, and can be omitted, for get and delete)
+            #[serde(default)]
+            pub value: String,
+        }
+
+        impl diststate::Request for Request {
+            fn serialize(&self) -> serde_json::Value {
+                json!({
+                    "op": self.op,
+                    "key": self.key,
+                    "value": self.value,
+                })
+            }
+            fn deserialize(ser: &serde_json::Value) -> Self {
+                Request {
+                    op: ser.get("op").unwrap().as_str().unwrap().to_owned(),
+                    key: ser.get("key").unwrap().as_str().unwrap().to_owned(),
+                    value: ser.get("value").unwrap().as_str().unwrap().to_owned(),
+                }
+            }
+        }
+
+        /// Response to a Request
+        #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+        pub struct Response {
+            #[serde(default)]
+            pub value: Option<String>,
+        }
+
+        impl diststate::Response for Response {}
+
+        impl DistributedState for TestState {
+            type Request = Request;
+            type Response = Response;
+
+            fn new() -> Self {
+                Self(HashMap::new())
+            }
+
+            fn dispatch(mut self, request: Request) -> (Self, Response) {
+                match &request.op[..] {
+                    "set" => {
+                        self.0.insert(request.key, request.value);
+                        (self, Response { value: None })
+                    }
+                    "get" => {
+                        let resp = Response {
+                            value: self.0.get(&request.key).cloned(),
+                        };
+                        (self, resp)
+                    }
+                    "delete" => {
+                        self.0.remove(&request.key);
+                        (self, Response { value: None })
+                    }
+                    _ => panic!("unknown op {:?}", request.op),
+                }
+            }
+        }
+
         #[tokio::test]
         async fn elect_a_leader() -> Fallible<()> {
             let mut net = LocalNetwork::new(4);
-            let mut servers = vec![
+            let mut servers: Vec<RaftServer<TestState>> = vec![
                 RaftServer::new(net.take(0)),
                 RaftServer::new(net.take(1)),
                 RaftServer::new(net.take(2)),

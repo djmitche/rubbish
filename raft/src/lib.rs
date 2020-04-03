@@ -7,6 +7,7 @@ type Term = u64;
 /// An Index is a position within the raft log.
 type Index = u64;
 
+pub mod diststate;
 mod errors;
 pub mod kv;
 pub mod log;

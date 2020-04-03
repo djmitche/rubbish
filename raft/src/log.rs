@@ -1,10 +1,9 @@
 use crate::{Index, Term};
 use failure::{err_msg, Fallible};
-use serde::{Deserialize, Serialize};
 use std::ops::{Bound::*, RangeBounds};
 
 /// A LogEntry is an entry in a RaftLog.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LogEntry<I: Clone> {
     pub term: Term,
     pub item: I,
