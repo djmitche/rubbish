@@ -102,6 +102,9 @@ where
     /// (server -> inner) Client Request to the state machine
     Request(DS::Request),
 
+    /// (inner -> server) Response from applying a request
+    Response(DS::Response),
+
     /// (server -> inner) Send a SetState back containing the current state
     #[cfg(test)]
     GetState,
@@ -387,8 +390,13 @@ where
     }
 
     /// Make a request of the distributed state machine
-    pub async fn request(&mut self, req: DS::Request) -> Fallible<()> {
-        Ok(self.control_tx.send(Control::Request(req)).await?)
+    pub async fn request(&mut self, req: DS::Request) -> Fallible<DS::Response> {
+        self.control_tx.send(Control::Request(req)).await?;
+        if let Control::Response(resp) = self.control_rx.recv().await.unwrap() {
+            return Ok(resp);
+        } else {
+            panic!("got unexpected control message");
+        }
     }
 
     /// Get a copy of the current server state (for testing)
@@ -505,6 +513,8 @@ where
 
             Control::Request(req) => handle_control_add(&mut self.state, &mut self.actions, req),
 
+            Control::Response(_) => unreachable!(),
+
             #[cfg(test)]
             Control::GetState => handle_control_get_state(&mut self.state, &mut self.actions),
 
@@ -552,9 +562,12 @@ where
                 }
                 Action::ApplyIndex(index) => {
                     let entry = self.state.log.get(index);
-                    // TODO: put ds on RustServerInner instead of state?
                     let response = self.ds.dispatch(&entry.item.req);
-                    println!("Apply {:?} -> {:?}", entry, response);
+                    println!("apply {:?} -> {:?}", entry.item, response);
+                    // XXX TODO uhhh...
+                    if self.state.mode == Mode::Leader {
+                        self.control_tx.send(Control::Response(response)).await?;
+                    }
                 }
                 Action::SendTo(peer, message) => {
                     let msg = message.serialize();
@@ -1688,58 +1701,77 @@ mod test {
                 RaftServer::new(net.take(3)),
             ];
 
-            // wait until we get a leader (usually ELECTION_TIMEOUT, sometimes a multiple of that)
-            let leader;
-            'leader: loop {
-                for server in &mut servers {
-                    let state = server.get_state().await?;
-                    if state.mode == Mode::Leader {
-                        leader = state.node_id;
-                        break 'leader;
+            async fn get_leader(servers: &mut Vec<RaftServer<TestState>>) -> Fallible<NodeId> {
+                loop {
+                    for server in servers.iter_mut() {
+                        let state = server.get_state().await?;
+                        if state.mode == Mode::Leader {
+                            return Ok(state.node_id);
+                        }
                     }
-                }
 
-                delay_for(Duration::from_millis(100)).await;
+                    delay_for(Duration::from_millis(100)).await;
+                }
             }
 
-            servers[leader]
-                .request(Request {
-                    op: "set".into(),
-                    key: "f".into(),
-                    value: "foo".into(),
-                })
-                .await
-                .unwrap();
-
-            // wait until that set is applied..
-            'set: loop {
-                let state = servers[leader].get_state().await?;
-                if state.last_applied == 1 {
-                    break 'set;
-                }
-
-                delay_for(Duration::from_millis(100)).await;
+            async fn set(
+                server: &mut RaftServer<TestState>,
+                key: &str,
+                value: &str,
+            ) -> Fallible<Option<String>> {
+                let res = server
+                    .request(Request {
+                        op: "set".into(),
+                        key: key.into(),
+                        value: value.into(),
+                    })
+                    .await?;
+                Ok(res.value)
             }
 
-            servers[leader]
-                .request(Request {
-                    op: "get".into(),
-                    key: "f".into(),
-                    value: "".into(),
-                })
-                .await
-                .unwrap();
-
-            // wait until the get is applied..
-            'get: loop {
-                let state = servers[leader].get_state().await?;
-                if state.last_applied == 2 {
-                    break 'get;
-                }
-
-                delay_for(Duration::from_millis(100)).await;
+            async fn get(
+                server: &mut RaftServer<TestState>,
+                key: &str,
+            ) -> Fallible<Option<String>> {
+                let res = server
+                    .request(Request {
+                        op: "get".into(),
+                        key: key.into(),
+                        value: "".into(),
+                    })
+                    .await?;
+                Ok(res.value)
             }
 
+            async fn delete(
+                server: &mut RaftServer<TestState>,
+                key: &str,
+            ) -> Fallible<Option<String>> {
+                let res = server
+                    .request(Request {
+                        op: "delete".into(),
+                        key: key.into(),
+                        value: "".into(),
+                    })
+                    .await?;
+                Ok(res.value)
+            }
+
+            let mut leader = get_leader(&mut servers).await?;
+
+            // get when nothing exists, set, then get again
+            assert_eq!(get(&mut servers[leader], "k").await?, None);
+            assert_eq!(
+                set(&mut servers[leader], "k", "foo").await?,
+                Some("foo".into())
+            );
+            assert_eq!(get(&mut servers[leader], "k").await?, Some("foo".into()));
+
+            // make some more changes>.
+            assert_eq!(delete(&mut servers[leader], "k").await?, None);
+            assert_eq!(get(&mut servers[leader], "k").await?, None);
+
+            // shut it all down
             for server in servers.drain(..) {
                 server.stop().await;
             }
