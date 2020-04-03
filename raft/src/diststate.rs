@@ -17,7 +17,7 @@ pub trait Response: fmt::Debug + Default + PartialEq + Clone + Sync + Send {}
 ///
 /// It is implemented as a state machine: all operations take the form of an
 /// requeset, and dispatch of an request generates a result and an updated state.
-pub trait DistributedState: Sized + fmt::Debug + Clone + 'static {
+pub trait DistributedState: Sized + fmt::Debug + Clone + Sync + Send + 'static {
     /// A request to modify the state
     type Request: Request;
 
@@ -28,5 +28,5 @@ pub trait DistributedState: Sized + fmt::Debug + Clone + 'static {
     fn new() -> Self;
 
     /// Dispatch a request to the state
-    fn dispatch(self, request: Self::Request) -> (Self, Self::Response);
+    fn dispatch(&mut self, request: &Self::Request) -> Self::Response;
 }

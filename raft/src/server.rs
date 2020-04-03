@@ -83,6 +83,9 @@ where
     /// Raft-related state of the server
     state: RaftState<DS>,
 
+    /// Our copy of the distributed state
+    ds: DS,
+
     /// Actions on the server (re-used in place)
     actions: Actions<DS>,
 }
@@ -366,6 +369,7 @@ where
                 match_index: [0].repeat(network_size),
                 voters: [false].repeat(network_size),
             },
+            ds: DS::new(),
             actions: Actions::new(),
         };
 
@@ -547,8 +551,10 @@ where
                     }
                 }
                 Action::ApplyIndex(index) => {
-                    // TODO
-                    println!("Apply {:?}", self.state.log.get(index));
+                    let entry = self.state.log.get(index);
+                    // TODO: put ds on RustServerInner instead of state?
+                    let response = self.ds.dispatch(&entry.item.req);
+                    println!("Apply {:?} -> {:?}", entry, response);
                 }
                 Action::SendTo(peer, message) => {
                     let msg = message.serialize();
@@ -1101,7 +1107,6 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::net::local::LocalNetwork;
     use serde::{Deserialize, Serialize};
 
     use crate::diststate::{self, DistributedState};
@@ -1136,9 +1141,9 @@ mod test {
             Self("Empty".into())
         }
 
-        fn dispatch(mut self, request: Request) -> (Self, Response) {
-            self.0 = request.0;
-            (self.clone(), Response(self.0))
+        fn dispatch(&mut self, request: &Request) -> Response {
+            self.0 = request.0.clone();
+            Response(self.0.clone())
         }
     }
 
@@ -1598,7 +1603,7 @@ mod test {
         use super::*;
 
         use crate::diststate::{self, DistributedState};
-        use crate::net::local::{LocalNetwork, LocalNode};
+        use crate::net::local::LocalNetwork;
         use std::collections::HashMap;
         use tokio::time::delay_for;
 
@@ -1653,21 +1658,20 @@ mod test {
                 Self(HashMap::new())
             }
 
-            fn dispatch(mut self, request: Request) -> (Self, Response) {
+            fn dispatch(&mut self, request: &Request) -> Response {
                 match &request.op[..] {
                     "set" => {
-                        self.0.insert(request.key, request.value);
-                        (self, Response { value: None })
+                        self.0.insert(request.key.clone(), request.value.clone());
+                        Response {
+                            value: Some(request.value.clone()),
+                        }
                     }
-                    "get" => {
-                        let resp = Response {
-                            value: self.0.get(&request.key).cloned(),
-                        };
-                        (self, resp)
-                    }
+                    "get" => Response {
+                        value: self.0.get(&request.key).cloned(),
+                    },
                     "delete" => {
                         self.0.remove(&request.key);
-                        (self, Response { value: None })
+                        Response { value: None }
                     }
                     _ => panic!("unknown op {:?}", request.op),
                 }
@@ -1685,12 +1689,52 @@ mod test {
             ];
 
             // wait until we get a leader (usually ELECTION_TIMEOUT, sometimes a multiple of that)
+            let leader;
             'leader: loop {
                 for server in &mut servers {
                     let state = server.get_state().await?;
                     if state.mode == Mode::Leader {
+                        leader = state.node_id;
                         break 'leader;
                     }
+                }
+
+                delay_for(Duration::from_millis(100)).await;
+            }
+
+            servers[leader]
+                .request(Request {
+                    op: "set".into(),
+                    key: "f".into(),
+                    value: "foo".into(),
+                })
+                .await
+                .unwrap();
+
+            // wait until that set is applied..
+            'set: loop {
+                let state = servers[leader].get_state().await?;
+                if state.last_applied == 1 {
+                    break 'set;
+                }
+
+                delay_for(Duration::from_millis(100)).await;
+            }
+
+            servers[leader]
+                .request(Request {
+                    op: "get".into(),
+                    key: "f".into(),
+                    value: "".into(),
+                })
+                .await
+                .unwrap();
+
+            // wait until the get is applied..
+            'get: loop {
+                let state = servers[leader].get_state().await?;
+                if state.last_applied == 2 {
+                    break 'get;
                 }
 
                 delay_for(Duration::from_millis(100)).await;
