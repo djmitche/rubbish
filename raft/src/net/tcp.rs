@@ -53,7 +53,7 @@ const DEBUG: bool = false;
 
 /// A TcpConfig is a vector of nodes in the network, giving the address at which that node is
 /// listening.
-type TcpConfig = Vec<SocketAddr>;
+pub type TcpConfig = Vec<SocketAddr>;
 
 /// A node on a TCP network, implementing RaftNetworkNode.
 pub struct TcpNode {

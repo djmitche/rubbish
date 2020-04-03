@@ -693,6 +693,7 @@ where
             println!("{}: {} - {}", millis, self.log_prefix, msg.as_ref());
         }
     }
+
     #[cfg(not(test))]
     fn log<S: AsRef<str>>(&self, msg: S) {}
 }
@@ -789,8 +790,7 @@ fn handle_append_entries_req<DS>(
             update_commitment(state, actions);
         }
 
-        // Update our current term if this is from a newer leader
-        state.current_term = message.term;
+        // Update our notion of who is the current leader..
         state.current_leader = Some(message.leader);
     }
 
@@ -981,6 +981,7 @@ where
 {
     if term > state.current_term {
         state.current_term = term;
+        state.voted_for = None;
         if state.mode != Mode::Follower {
             change_mode(state, actions, Mode::Follower);
         }
@@ -1120,8 +1121,6 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use serde::{Deserialize, Serialize};
-
     use crate::diststate::{self, DistributedState};
 
     /// TestState just stores a string.  Requests change it.  It's easy.
@@ -1325,6 +1324,7 @@ mod test {
         assert_eq!(state.commit_index, 1); // limited by number of entries..
         assert_eq!(state.current_term, 7);
         assert_eq!(state.current_leader, Some(1));
+        assert_eq!(state.voted_for, None);
         assert_eq!(
             actions.actions,
             vec![
@@ -1554,6 +1554,7 @@ mod test {
         let (mut state, mut actions) = setup(2);
         state.mode = Mode::Leader;
         state.current_term = 4;
+        state.voted_for = Some(1);
 
         handle_append_entries_rep(
             &mut state,
@@ -1567,6 +1568,7 @@ mod test {
         );
 
         assert_eq!(state.current_term, 5);
+        assert_eq!(state.voted_for, None);
         assert_eq!(state.mode, Mode::Follower);
         assert_eq!(
             actions.actions,
@@ -1624,7 +1626,7 @@ mod test {
         pub struct TestState(HashMap<String, String>);
 
         /// Clients send Request objects (JSON-encoded) to the server.
-        #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+        #[derive(PartialEq, Debug, Clone, Default)]
         pub struct Request {
             /// Operation: one of get, set, or delete
             pub op: String,
@@ -1633,7 +1635,6 @@ mod test {
             pub key: String,
 
             /// value to set (ignored, and can be omitted, for get and delete)
-            #[serde(default)]
             pub value: String,
         }
 
@@ -1655,9 +1656,8 @@ mod test {
         }
 
         /// Response to a Request
-        #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Default)]
+        #[derive(PartialEq, Debug, Clone, Default)]
         pub struct Response {
-            #[serde(default)]
             pub value: Option<String>,
         }
 
@@ -1757,7 +1757,7 @@ mod test {
                 Ok(res.value)
             }
 
-            let mut leader = get_leader(&mut servers).await?;
+            let leader = get_leader(&mut servers).await?;
 
             // get when nothing exists, set, then get again
             assert_eq!(get(&mut servers[leader], "k").await?, None);

@@ -13,6 +13,7 @@
   - don't require serde??
 
 * candidate_id, leader fields in messages are redundant
+* enable/disable debugging output with a feature flag
 
 ## Server
 
