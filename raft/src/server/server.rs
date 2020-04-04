@@ -36,8 +36,6 @@ where
     {
         let (control_tx_in, control_rx_in) = mpsc::channel(1);
         let (control_tx_out, control_rx_out) = mpsc::channel(1);
-        let node_id = node.node_id();
-        let network_size = node.network_size();
         let inner = RaftServerInner::new(node, control_rx_in, control_tx_out);
 
         RaftServer {

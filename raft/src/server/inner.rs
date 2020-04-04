@@ -409,5 +409,5 @@ where
     }
 
     #[cfg(not(test))]
-    pub(super) fn log<S: AsRef<str>>(&self, msg: S) {}
+    pub(super) fn log<S: AsRef<str>>(&self, _: S) {}
 }
