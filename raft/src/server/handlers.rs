@@ -1,3 +1,8 @@
+use super::control::Control;
+use super::inner::Actions;
+use super::log::LogItem;
+use super::message::*;
+use super::state::{Mode, RaftState};
 use crate::diststate::{self, DistributedState, Request};
 use crate::log::{LogEntry, RaftLog};
 use crate::net::{NodeId, RaftNetworkNode};
@@ -12,10 +17,6 @@ use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::{delay_queue, DelayQueue};
-
-use super::control::Control;
-use super::state::{Mode, RaftState};
-use super::*;
 
 pub(super) fn handle_control_add<DS>(
     state: &mut RaftState<DS>,

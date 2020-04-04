@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::{delay_queue, DelayQueue};
 
-use super::LogItem;
+use super::log::LogItem;
 
 /// Raft-related state of the server
 #[derive(Debug, Clone, PartialEq)]

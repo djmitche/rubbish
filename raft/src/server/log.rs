@@ -13,15 +13,10 @@ use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::{delay_queue, DelayQueue};
 
-mod control;
-mod handlers;
-mod inner;
-mod log;
-mod message;
-mod server;
-mod state;
-
-#[cfg(test)]
-mod test;
-
-pub use server::RaftServer;
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct LogItem<R>
+where
+    R: diststate::Request,
+{
+    pub(super) req: R,
+}

@@ -1,3 +1,7 @@
+use super::control::Control;
+use super::handlers;
+use super::message::Message;
+use super::state::{Mode, RaftState};
 use crate::diststate::{self, DistributedState, Request};
 use crate::log::{LogEntry, RaftLog};
 use crate::net::{NodeId, RaftNetworkNode};
@@ -13,13 +17,23 @@ use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::{delay_queue, DelayQueue};
 
-use super::control::Control;
-use super::handlers;
-use super::state::{Mode, RaftState};
-use super::{Actions, Message, *};
-
 #[cfg(test)]
 use std::time::SystemTime;
+
+/// Set this to true to enable lots of println!
+const DEBUG: bool = true;
+
+/// Time after which a new election should be called; this should be well over
+/// the maximum RTT between two nodes, and well under the servers' MTBF.
+const ELECTION_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Range of random times around ELECTION_TIMEOUT in which to call an election.  This
+/// must be smaller than ELECTION_TIMEOUT - HEARTBEAT.
+const ELECTION_TIMEOUT_FUZZ: Duration = Duration::from_millis(100);
+
+/// Maximum time between AppendEntries calls.  This should be at least an RTT less than
+/// ELECTION_TIMEOUT.
+const HEARTBEAT: Duration = Duration::from_millis(200);
 
 /// Container for the background task in a server.
 ///
@@ -281,4 +295,121 @@ where
         }
         Ok(())
     }
+}
+
+/// Actions represent the changes that should be made in response to an algorithm event.
+///
+/// This abstraction is not necessary to the algorithm, but has a few advantages:
+///  - all event handlers are synchronous
+///  - side-effects are limited to state changes and actions
+///  - event handlers are easy to test
+///
+/// The struct provides convenience functions to add an action; the RaftServerInner's
+/// execute_actions method then actually performs the actions.
+#[derive(Debug, PartialEq)]
+pub(super) struct Actions<DS>
+where
+    DS: DistributedState,
+{
+    pub(super) actions: Vec<Action<DS>>,
+    #[cfg(test)]
+    log_prefix: String,
+}
+// TODO: define PartialEq manually, use in assert_eq!() in tests
+
+/// See Actions
+#[derive(Debug, PartialEq)]
+pub(super) enum Action<DS>
+where
+    DS: DistributedState,
+{
+    /// Start the election_timeout timer (resetting any existing timer)
+    SetElectionTimer,
+
+    /// Stop the election_timeout timer.
+    StopElectionTimer,
+
+    /// Start the heartbeat timer for the given peer (resetting any existing timer)
+    SetHeartbeatTimer(NodeId),
+
+    /// Stop the heartbeat timer for all peers
+    StopHeartbeatTimers,
+
+    /// Apply the entry at the given index to the state machine
+    ApplyIndex(Index),
+
+    /// Send a message to a peer
+    SendTo(NodeId, Message<DS>),
+
+    /// Send a message on the control channel
+    SendControl(Control<DS>),
+}
+
+impl<DS> Actions<DS>
+where
+    DS: DistributedState,
+{
+    pub(super) fn new() -> Actions<DS> {
+        Actions {
+            actions: vec![],
+            #[cfg(test)]
+            log_prefix: String::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_log_prefix(&mut self, log_prefix: String) {
+        self.log_prefix = log_prefix;
+    }
+
+    #[cfg(not(test))]
+    pub(super) fn set_log_prefix(&mut self, log_prefix: String) {}
+
+    fn drain(&mut self) -> std::vec::Drain<Action<DS>> {
+        self.actions.drain(..)
+    }
+
+    pub(super) fn set_election_timer(&mut self) {
+        self.actions.push(Action::SetElectionTimer);
+    }
+
+    pub(super) fn stop_election_timer(&mut self) {
+        self.actions.push(Action::StopElectionTimer);
+    }
+
+    pub(super) fn set_heartbeat_timer(&mut self, peer: NodeId) {
+        self.actions.push(Action::SetHeartbeatTimer(peer));
+    }
+
+    pub(super) fn stop_heartbeat_timers(&mut self) {
+        self.actions.push(Action::StopHeartbeatTimers);
+    }
+
+    pub(super) fn apply_index(&mut self, index: Index) {
+        self.actions.push(Action::ApplyIndex(index));
+    }
+
+    pub(super) fn send_to(&mut self, peer: NodeId, message: Message<DS>) {
+        self.actions.push(Action::SendTo(peer, message));
+    }
+
+    pub(super) fn send_control(&mut self, control: Control<DS>) {
+        self.actions.push(Action::SendControl(control));
+    }
+
+    /// Not quite an "action", but actions.log will output debug logging (immediately) on
+    /// debug builds when DEBUG is set to true.
+    #[cfg(test)]
+    pub(super) fn log<S: AsRef<str>>(&self, msg: S) {
+        if DEBUG {
+            let millis = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            println!("{}: {} - {}", millis, self.log_prefix, msg.as_ref());
+        }
+    }
+
+    #[cfg(not(test))]
+    pub(super) fn log<S: AsRef<str>>(&self, msg: S) {}
 }

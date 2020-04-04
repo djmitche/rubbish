@@ -14,9 +14,9 @@ use tokio::task;
 use tokio::time::{delay_queue, DelayQueue};
 
 use super::control::Control;
+use super::inner::Actions;
 use super::inner::RaftServerInner;
 use super::state::{Mode, RaftState};
-use super::Actions;
 
 #[cfg(test)]
 use std::time::SystemTime;
