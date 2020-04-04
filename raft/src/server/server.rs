@@ -75,6 +75,8 @@ where
     }
 
     /// Set the current server state (for testing)
+    // NOTE: currently unused, but might be useful for tests
+    #[allow(dead_code)]
     #[cfg(test)]
     pub(super) async fn set_state(&mut self, state: RaftState<DS>) -> Fallible<()> {
         self.control_tx.send(Control::SetState(state)).await?;

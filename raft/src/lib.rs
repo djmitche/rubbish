@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![allow(unused_variables)]
 
 /// A Term describes the leadership term in which an entry was amde

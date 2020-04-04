@@ -18,6 +18,7 @@ use tokio::time::{delay_queue, DelayQueue};
 use std::time::SystemTime;
 
 /// Set this to true to enable lots of println!
+#[cfg(test)]
 const DEBUG: bool = true;
 
 /// Time after which a new election should be called; this should be well over
@@ -285,6 +286,7 @@ where
                     let msg = message.serialize();
                     self.node.send(peer, msg).await?;
                 }
+                #[cfg(test)]
                 Action::SendControl(control) => {
                     self.control_tx.send(control).await?;
                 }
@@ -339,6 +341,7 @@ where
     SendTo(NodeId, Message<DS>),
 
     /// Send a message on the control channel
+    #[cfg(test)]
     SendControl(Control<DS>),
 }
 
@@ -358,9 +361,6 @@ where
     pub(super) fn set_log_prefix(&mut self, log_prefix: String) {
         self.log_prefix = log_prefix;
     }
-
-    #[cfg(not(test))]
-    pub(super) fn set_log_prefix(&mut self, log_prefix: String) {}
 
     fn drain(&mut self) -> std::vec::Drain<Action<DS>> {
         self.actions.drain(..)
@@ -390,6 +390,7 @@ where
         self.actions.push(Action::SendTo(peer, message));
     }
 
+    #[cfg(test)]
     pub(super) fn send_control(&mut self, control: Control<DS>) {
         self.actions.push(Action::SendControl(control));
     }
