@@ -7,7 +7,7 @@ use super::RaftServer;
 use crate::diststate::{self, DistributedState};
 use crate::log::{LogEntry, RaftLog};
 use crate::net::NodeId;
-use crate::{Index, Term};
+use crate::Term;
 use failure::Fallible;
 use serde_json::{self, json};
 use std::time::Duration;

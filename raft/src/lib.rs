@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
-#![allow(unused_imports)]
 
 /// A Term describes the leadership term in which an entry was amde
 type Term = u64;
