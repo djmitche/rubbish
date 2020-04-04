@@ -1,5 +1,18 @@
 ## Next
 
+Remove from class repo, add to https://github.com/djmitche/rubbish/blob/master/src/prax
+
+## Functionality
+
+* Client request tracking and a usable pub API for RaftServer
+  * Options for consistency:
+    - stale reads
+    - batched reads
+    - "after" some other transaction
+* Stable storage
+* Log compaction
+* Membership changes
+
 ## Doc
 
 * doc deviations from paper
@@ -7,15 +20,29 @@
 
 ## Misc
 
-* refactor into sub-modules
+* remove kv, transport
+* candidate_id, leader fields in messages are redundant
+* enable/disable debugging output with a feature flag
+
+## Testing
+
+* add an executable test based on src/bin/raftserver.rs that uses threads and
+  TCP
+* enhance LocalNetwork to lose packets, delay packets, kill servers, etc.,
+  using a repeatable random seed
+
+## server
+
+* move tests to appropriate modules (e.g., handlers)
+* write tests for other modules
+
+## server::message
+
 * Handle message ser/de *far* better
   - don't assume JSON
   - don't require serde??
 
-* candidate_id, leader fields in messages are redundant
-* enable/disable debugging output with a feature flag
-
-## Server
+## server::handlers
 
  * several more methods need tests (TODO: test)
 
