@@ -14,11 +14,3 @@ net2 = "0.2.33"
 async-trait = "0.1.27"
 nix = "0.17.0"
 rand = "0.7.3"
-
-[[bin]]
-name = "kvserver"
-path = "src/bin/kvserver.rs"
-
-[[bin]]
-name = "kvclient"
-path = "src/bin/kvclient.rs"

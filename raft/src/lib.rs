@@ -9,11 +9,9 @@ type Index = u64;
 
 pub mod diststate;
 mod errors;
-pub mod kv;
 pub mod log;
 pub mod net;
 pub mod server;
-pub mod transport;
 pub(crate) mod util;
 
 pub use errors::Error;

@@ -5,10 +5,12 @@ Remove from class repo, add to https://github.com/djmitche/rubbish/blob/master/s
 ## Functionality
 
 * Client request tracking and a usable pub API for RaftServer
-  * Options for consistency:
-    - stale reads
-    - batched reads
-    - "after" some other transaction
+  * Initial creation returns an id (node id + log index?)
+  * API to return a stream of committed id's, beginning with a given id
+  * RO operations, with options for consistency:
+    - batched reads (leader waits for majority)
+    - stale reads (no conditions)
+    - "after" some other transaction (condition on another request id)
 * Stable storage
 * Log compaction
 * Membership changes
