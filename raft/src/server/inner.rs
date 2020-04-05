@@ -2,7 +2,7 @@ use super::control::Control;
 use super::handlers;
 use super::message::Message;
 use super::state::{Mode, RaftState};
-use crate::diststate::DistributedState;
+use crate::diststate::{DistributedState};
 use crate::log::RaftLog;
 use crate::net::{NodeId, RaftNetworkNode};
 use crate::Index;

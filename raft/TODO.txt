@@ -28,11 +28,7 @@ Remove from class repo, add to https://github.com/djmitche/rubbish/blob/master/s
 
 * enhance LocalNetwork to lose packets, delay packets, kill servers, etc.,
   using a repeatable random seed
-
-## server
-
-* move tests to appropriate modules (e.g., handlers)
-* write tests for other modules
+* write tests for modules -- just about everything is untested
 
 ## server::message
 
