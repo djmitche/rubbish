@@ -28,8 +28,6 @@ Remove from class repo, add to https://github.com/djmitche/rubbish/blob/master/s
 
 ## Testing
 
-* add an executable test based on src/bin/raftserver.rs that uses threads and
-  TCP
 * enhance LocalNetwork to lose packets, delay packets, kill servers, etc.,
   using a repeatable random seed
 

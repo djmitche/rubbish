@@ -5,7 +5,6 @@ use raft::net::NodeId;
 use raft::server::RaftServer;
 use serde_json::json;
 use std::collections::HashMap;
-use std::env;
 use std::time::Duration;
 use tokio::time::delay_for;
 
@@ -78,8 +77,8 @@ impl DistributedState for TestState {
     }
 }
 
-#[tokio::main]
-async fn main() -> Fallible<()> {
+#[tokio::test]
+async fn test() -> Fallible<()> {
     // TODO: load this from a config file
     let config: TcpConfig = vec![
         "127.0.0.1:25000".parse().unwrap(),
@@ -87,16 +86,17 @@ async fn main() -> Fallible<()> {
         "127.0.0.1:25002".parse().unwrap(),
     ];
 
-    let args: Vec<String> = env::args().collect();
-    assert_eq!(args.len(), 2);
-    let node_id = args[1].parse::<NodeId>()?;
+    let servers = config.iter().enumerate().map(|(node_id, _)| {
+        let node = TcpNode::new(node_id as NodeId, config.clone());
+        let server: RaftServer<TestState> = RaftServer::new(node);
+        server
+    });
 
-    let node = TcpNode::new(node_id, config);
-    let server: RaftServer<TestState> = RaftServer::new(node);
+    // TODO: when client interface is available, write, read, etc.
+    delay_for(Duration::from_secs(1)).await;
 
-    delay_for(Duration::from_secs(20)).await;
-
-    println!("shutting down");
-    server.stop().await;
+    for server in servers {
+        server.stop().await;
+    }
     Ok(())
 }
