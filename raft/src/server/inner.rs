@@ -14,12 +14,8 @@ use tokio::stream::StreamExt;
 use tokio::sync::mpsc;
 use tokio::time::{delay_queue, DelayQueue};
 
-#[cfg(test)]
+#[cfg(feature="debugging")]
 use std::time::SystemTime;
-
-/// Set this to true to enable lots of println!
-#[cfg(test)]
-const DEBUG: bool = true;
 
 /// Time after which a new election should be called; this should be well over
 /// the maximum RTT between two nodes, and well under the servers' MTBF.
@@ -129,7 +125,7 @@ where
     // event handling
 
     pub(super) async fn run(mut self) {
-        #[cfg(test)]
+        #[cfg(feature="debugging")]
         {
             self.actions
                 .set_log_prefix(format!("server={}", self.state.node_id,));
@@ -140,7 +136,7 @@ where
         self.execute_actions().await.unwrap();
 
         while !self.state.stop {
-            #[cfg(test)]
+            #[cfg(feature="debugging")]
             {
                 self.actions.set_log_prefix(format!(
                     "server={} ({:?})",
@@ -311,7 +307,7 @@ where
     DS: DistributedState,
 {
     pub(super) actions: Vec<Action<DS>>,
-    #[cfg(test)]
+    #[cfg(feature="debugging")]
     log_prefix: String,
 }
 // TODO: define PartialEq manually, use in assert_eq!() in tests
@@ -352,12 +348,12 @@ where
     pub(super) fn new() -> Actions<DS> {
         Actions {
             actions: vec![],
-            #[cfg(test)]
+            #[cfg(feature="debugging")]
             log_prefix: String::new(),
         }
     }
 
-    #[cfg(test)]
+    #[cfg(feature="debugging")]
     pub(super) fn set_log_prefix(&mut self, log_prefix: String) {
         self.log_prefix = log_prefix;
     }
@@ -396,18 +392,16 @@ where
     }
 
     /// Not quite an "action", but actions.log will output debug logging (immediately) on
-    /// debug builds when DEBUG is set to true.
-    #[cfg(test)]
+    /// builds with the "debugging" feature.
+    #[cfg(feature="debugging")]
     pub(super) fn log<S: AsRef<str>>(&self, msg: S) {
-        if DEBUG {
-            let millis = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            println!("{}: {} - {}", millis, self.log_prefix, msg.as_ref());
-        }
+        let millis = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        println!("{}: {} - {}", millis, self.log_prefix, msg.as_ref());
     }
 
-    #[cfg(not(test))]
+    #[cfg(not(feature="debugging"))]
     pub(super) fn log<S: AsRef<str>>(&self, _: S) {}
 }

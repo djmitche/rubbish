@@ -22,9 +22,7 @@ Remove from class repo, add to https://github.com/djmitche/rubbish/blob/master/s
 
 ## Misc
 
-* remove kv, transport
 * candidate_id, leader fields in messages are redundant
-* enable/disable debugging output with a feature flag
 
 ## Testing
 

@@ -65,7 +65,9 @@ fn setup(network_size: usize) -> (RaftState<TestState>, Actions<TestState>) {
         match_index: [0].repeat(network_size),
         voters: [false].repeat(network_size),
     };
+    #[allow(unused_mut)]
     let mut actions = Actions::new();
+    #[cfg(feature = "debugging")]
     actions.set_log_prefix("test".into());
     (state, actions)
 }

@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Dustin J. Mitchell <dustin@mozilla.com>"]
 edition = "2018"
 
+[features]
+# if set, send protocol debugging output to stdout
+debugging = []
+
 [dependencies]
 byteorder = "1.3.4"
 failure = "0.1.7"
