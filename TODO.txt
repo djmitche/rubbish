@@ -1,6 +1,10 @@
-## Next
+# Next
 
-Remove from class repo, add to https://github.com/djmitche/rubbish/blob/master/src/prax
+* Switch rest of rubbish to use Failure
+* Generalize net to allow adding/removing nodes
+* Implement CAS with internal storage, refcounting
+
+# Raft
 
 ## Functionality
 
