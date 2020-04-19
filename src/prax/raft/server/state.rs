@@ -1,8 +1,8 @@
 use super::log::LogItem;
-use crate::diststate::DistributedState;
-use crate::log::RaftLog;
+use crate::prax::raft::diststate::DistributedState;
+use crate::prax::raft::log::RaftLog;
 use crate::net::NodeId;
-use crate::{Index, Term};
+use crate::prax::raft::{Index, Term};
 
 /// Raft-related state of the server
 #[derive(Debug, Clone, PartialEq)]

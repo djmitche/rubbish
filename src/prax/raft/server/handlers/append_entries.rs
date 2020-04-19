@@ -1,12 +1,12 @@
-use crate::server::inner::Actions;
-use crate::server::message::*;
-use crate::server::state::{Mode, RaftState};
-use crate::diststate::DistributedState;
+use crate::prax::raft::server::inner::Actions;
+use crate::prax::raft::server::message::*;
+use crate::prax::raft::server::state::{Mode, RaftState};
+use crate::prax::raft::diststate::DistributedState;
 use crate::net::NodeId;
 use std::cmp;
 use super::utils::*;
 
-pub(in crate::server) fn handle_append_entries_req<DS>(
+pub(in crate::prax::raft::server) fn handle_append_entries_req<DS>(
     state: &mut RaftState<DS>,
     actions: &mut Actions<DS>,
     peer: NodeId,
@@ -77,7 +77,7 @@ pub(in crate::server) fn handle_append_entries_req<DS>(
     )
 }
 
-pub(in crate::server) fn handle_append_entries_rep<DS>(
+pub(in crate::prax::raft::server) fn handle_append_entries_rep<DS>(
     state: &mut RaftState<DS>,
     actions: &mut Actions<DS>,
     peer: NodeId,
@@ -111,8 +111,8 @@ pub(in crate::server) fn handle_append_entries_rep<DS>(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::server::handlers::test::*;
-    use crate::server::inner::Action;
+    use crate::prax::raft::server::handlers::test::*;
+    use crate::prax::raft::server::inner::Action;
 
     #[test]
     fn test_append_entries_req_success() {

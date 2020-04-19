@@ -351,10 +351,10 @@ mod test {
 
         let tree = make_test_tree(&fs);
         assert_eq!(tree.read(&[]).unwrap(), None);
-        assert_eq!(tree.read(&["notathing"]).unwrap(), None);;
-        assert_eq!(tree.read(&["sub", "sub2", "sub"]).unwrap(), None);;
+        assert_eq!(tree.read(&["notathing"]).unwrap(), None);
+        assert_eq!(tree.read(&["sub", "sub2", "sub"]).unwrap(), None);
         // "sub" exists but there's no data there
-        assert_eq!(tree.read(&["sub"]).unwrap(), None);;
+        assert_eq!(tree.read(&["sub"]).unwrap(), None);
     }
 
     #[test]

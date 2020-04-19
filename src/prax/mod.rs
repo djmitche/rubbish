@@ -42,6 +42,8 @@
 //! }
 //! ```
 
+pub mod raft;
+
 pub trait DistributedState: Sized {
     type Change;
 

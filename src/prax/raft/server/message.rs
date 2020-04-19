@@ -1,8 +1,8 @@
 use super::log::LogItem;
-use crate::diststate::{self, DistributedState, Request};
-use crate::log::LogEntry;
+use crate::prax::raft::diststate::{self, DistributedState, Request};
+use crate::prax::raft::log::LogEntry;
 use crate::net::NodeId;
-use crate::{Index, Term};
+use crate::prax::raft::{Index, Term};
 use serde_json::{self, json};
 
 #[derive(Debug, PartialEq, Default)]

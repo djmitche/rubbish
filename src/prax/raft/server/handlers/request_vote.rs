@@ -1,11 +1,11 @@
-use crate::server::inner::Actions;
-use crate::server::message::*;
-use crate::server::state::{Mode, RaftState};
-use crate::diststate::DistributedState;
+use crate::prax::raft::server::inner::Actions;
+use crate::prax::raft::server::message::*;
+use crate::prax::raft::server::state::{Mode, RaftState};
+use crate::prax::raft::diststate::DistributedState;
 use crate::net::NodeId;
 use super::utils::*;
 
-pub(in crate::server) fn handle_request_vote_req<DS>(
+pub(in crate::prax::raft::server) fn handle_request_vote_req<DS>(
     state: &mut RaftState<DS>,
     actions: &mut Actions<DS>,
     peer: NodeId,
@@ -58,7 +58,7 @@ pub(in crate::server) fn handle_request_vote_req<DS>(
     );
 }
 
-pub(in crate::server) fn handle_request_vote_rep<DS>(
+pub(in crate::prax::raft::server) fn handle_request_vote_rep<DS>(
     state: &mut RaftState<DS>,
     actions: &mut Actions<DS>,
     peer: NodeId,

@@ -1,4 +1,4 @@
-use crate::diststate::DistributedState;
+use crate::prax::raft::diststate::DistributedState;
 use crate::net::RaftNetworkNode;
 use failure::Fallible;
 use tokio::sync::mpsc;

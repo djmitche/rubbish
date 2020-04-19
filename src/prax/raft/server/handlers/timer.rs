@@ -1,10 +1,10 @@
-use crate::server::inner::Actions;
-use crate::server::state::{Mode, RaftState};
-use crate::diststate::DistributedState;
+use crate::prax::raft::server::inner::Actions;
+use crate::prax::raft::server::state::{Mode, RaftState};
+use crate::prax::raft::diststate::DistributedState;
 use crate::net::NodeId;
 use super::utils::*;
 
-pub(in crate::server) fn handle_heartbeat_timer<DS>(
+pub(in crate::prax::raft::server) fn handle_heartbeat_timer<DS>(
     state: &mut RaftState<DS>,
     actions: &mut Actions<DS>,
     peer: NodeId,
@@ -15,7 +15,7 @@ pub(in crate::server) fn handle_heartbeat_timer<DS>(
     send_append_entries(state, actions, peer);
 }
 
-pub(in crate::server) fn handle_election_timer<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>)
+pub(in crate::prax::raft::server) fn handle_election_timer<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>)
 where
     DS: DistributedState,
 {

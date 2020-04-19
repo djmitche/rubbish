@@ -1,9 +1,9 @@
-use crate::server::inner::Actions;
-use crate::server::message::*;
-use crate::server::state::{Mode, RaftState};
-use crate::diststate::DistributedState;
+use crate::prax::raft::server::inner::Actions;
+use crate::prax::raft::server::message::*;
+use crate::prax::raft::server::state::{Mode, RaftState};
+use crate::prax::raft::diststate::DistributedState;
 use crate::net::NodeId;
-use crate::{Index, Term};
+use crate::prax::raft::{Index, Term};
 
 /// Calculate prev_log_index and prev_log_term based on the given next_index.  This handles
 /// the boundary condition of next_index == 1

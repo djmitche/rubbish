@@ -1,4 +1,4 @@
-use crate::diststate::DistributedState;
+use crate::prax::raft::diststate::DistributedState;
 
 #[cfg(test)]
 use super::state::RaftState;

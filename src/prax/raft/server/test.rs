@@ -1,7 +1,7 @@
 use super::*;
 
-use crate::diststate::{self, DistributedState};
-use crate::server::state::Mode;
+use crate::prax::raft::diststate::{self, DistributedState};
+use crate::prax::raft::server::state::Mode;
 use crate::net::local::LocalNetwork;
 use std::collections::HashMap;
 use tokio::time::delay_for;

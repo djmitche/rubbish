@@ -1,4 +1,4 @@
-use crate::diststate;
+use crate::prax::raft::diststate;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LogItem<R>

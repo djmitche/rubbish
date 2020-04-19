@@ -10,7 +10,6 @@ type Index = u64;
 pub mod diststate;
 mod errors;
 pub mod log;
-pub mod net;
 pub mod server;
 pub(crate) mod util;
 

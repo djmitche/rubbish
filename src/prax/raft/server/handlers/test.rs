@@ -1,9 +1,9 @@
-use crate::server::inner::{Actions};
-use crate::server::log::LogItem;
-use crate::server::state::{Mode, RaftState};
-use crate::diststate::{self, DistributedState};
-use crate::log::{LogEntry, RaftLog};
-use crate::Term;
+use crate::prax::raft::server::inner::{Actions};
+use crate::prax::raft::server::log::LogItem;
+use crate::prax::raft::server::state::{Mode, RaftState};
+use crate::prax::raft::diststate::{self, DistributedState};
+use crate::prax::raft::log::{LogEntry, RaftLog};
+use crate::prax::raft::Term;
 use serde_json;
 
 /// TestState just stores a string.  Requests change it.  It's easy.

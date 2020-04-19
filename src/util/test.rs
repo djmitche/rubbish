@@ -1,7 +1,7 @@
-use std::sync::{Once, ONCE_INIT};
+use std::sync::Once;
 use env_logger;
 
-static LOGGER_INITIALIZED: Once = ONCE_INIT;
+static LOGGER_INITIALIZED: Once = Once::new();
 
 /// Initialize `env_logger` on the first call, and do nothing thereafter.  This is useful in tests
 /// where the order of the tests is not defined, but each requires `env_logger`.

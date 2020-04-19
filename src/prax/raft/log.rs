@@ -1,4 +1,4 @@
-use crate::{Index, Term};
+use crate::prax::raft::{Index, Term};
 use failure::{err_msg, Fallible};
 use std::ops::{Bound::*, RangeBounds};
 
