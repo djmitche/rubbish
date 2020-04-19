@@ -9,6 +9,7 @@ keywords = ["consensus", "distributed", "lock"]
 documentation = "https://github.com/djmitche/rubbish"
 homepage = "https://github.com/djmitche/rubbish"
 repository = "https://github.com/djmitche/rubbish"
+edition = "2018"
 
 [dependencies]
 rust-crypto = "0.2.36"

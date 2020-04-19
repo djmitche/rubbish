@@ -1,11 +1,11 @@
-use fs::error::*;
-use fs::lazy::{LazyHashedObject, LazyContent};
-use fs::fs::FileSystem;
+use super::error::*;
+use super::lazy::{LazyHashedObject, LazyContent};
+use super::fs::FileSystem;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter, Error as FmtError};
 use std::result::Result as StdResult;
-use cas::Hash;
-use cas::CAS;
+use crate::cas::Hash;
+use crate::cas::CAS;
 use std::rc::Rc;
 
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
@@ -241,11 +241,11 @@ where
 
 #[cfg(test)]
 mod test {
-    use fs::FileSystem;
-    use cas::CAS;
+    use super::FileSystem;
+    use crate::cas::CAS;
     use super::*;
-    use cas::LocalStorage;
-    use cas::Hash;
+    use crate::cas::LocalStorage;
+    use crate::cas::Hash;
 
     const EMPTY_HASH: &'static str = "3e7077fd2f66d689e0cee6a7cf5b37bf2dca7c979af356d0a31cbc5c85605c7d";
 

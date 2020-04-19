@@ -1,7 +1,7 @@
-use fs::error::*;
-use fs::fs::FileSystem;
-use cas::Hash;
-use cas::CAS;
+use super::error::*;
+use super::fs::FileSystem;
+use crate::cas::Hash;
+use crate::cas::CAS;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 
@@ -188,9 +188,9 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use cas::{LocalStorage, CAS};
-    use fs::FileSystem;
-    use cas::Hash;
+    use crate::cas::{LocalStorage, CAS};
+    use crate::fs::FileSystem;
+    use crate::cas::Hash;
 
     #[derive(Debug, RustcDecodable, RustcEncodable)]
     struct TestContent(String);

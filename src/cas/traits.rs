@@ -1,4 +1,4 @@
-use cas::error::*;
+use super::error::*;
 use super::hash::Hash;
 use rustc_serialize::{Decodable, Encodable};
 

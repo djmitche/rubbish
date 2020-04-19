@@ -1,9 +1,9 @@
-use fs::error::*;
-use fs::lazy::{LazyHashedObject, LazyContent};
-use fs::fs::FileSystem;
-use fs::tree::Tree;
-use cas::Hash;
-use cas::CAS;
+use super::error::*;
+use super::lazy::{LazyHashedObject, LazyContent};
+use super::fs::FileSystem;
+use super::tree::Tree;
+use crate::cas::Hash;
+use crate::cas::CAS;
 use std::rc::Rc;
 
 // TODO: use pub(crate)
@@ -133,10 +133,10 @@ where
 #[cfg(test)]
 mod test {
     use super::Commit;
-    use fs::FileSystem;
-    use fs::tree::Tree;
-    use cas::LocalStorage;
-    use cas::Hash;
+    use crate::fs::FileSystem;
+    use crate::fs::tree::Tree;
+    use crate::cas::LocalStorage;
+    use crate::cas::Hash;
 
     const ROOT_HASH: &'static str = "86f8e00f8fdef1675b25f5a38abde52a7a9da0bf8506f137e32d6e3f37d88740";
     const EMPTY_TREE_HASH: &'static str = "3e7077fd2f66d689e0cee6a7cf5b37bf2dca7c979af356d0a31cbc5c85605c7d";

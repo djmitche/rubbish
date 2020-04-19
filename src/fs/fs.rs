@@ -1,6 +1,6 @@
-use fs::commit::Commit;
-use cas::Hash;
-use cas::CAS;
+use super::commit::Commit;
+use crate::cas::Hash;
+use crate::cas::CAS;
 
 // TODO: use pub(crate)
 
@@ -38,10 +38,10 @@ where
 #[cfg(test)]
 mod test {
     use super::FileSystem;
-    use fs::commit::Commit;
-    use fs::tree::Tree;
-    use cas::LocalStorage;
-    use cas::Hash;
+    use crate::fs::commit::Commit;
+    use crate::fs::tree::Tree;
+    use crate::cas::LocalStorage;
+    use crate::cas::Hash;
 
     const ROOT_HASH: &'static str = "86f8e00f8fdef1675b25f5a38abde52a7a9da0bf8506f137e32d6e3f37d88740";
 

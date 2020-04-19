@@ -1,5 +1,5 @@
 use super::hash::Hash;
-use cas::error::*;
+use super::error::*;
 use rustc_serialize::{Decodable, Encodable};
 use bincode::SizeLimit;
 use bincode::rustc_serialize::{encode, decode};

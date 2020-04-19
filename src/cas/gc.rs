@@ -1,7 +1,7 @@
 //! Support for garbage collection cycles.
 
 use super::traits::CAS;
-use cas::error::*;
+use super::error::*;
 
 /// Type GarbageCycle represents a garbage-collection cycle.  Between creation and destruction of
 /// an object of this type, touch or store every non-garbage object.  Any objects not touched

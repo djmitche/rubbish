@@ -1,4 +1,4 @@
-use cas::error::*;
+use super::error::*;
 use super::hash::Hash;
 use super::traits::CAS;
 use super::content::Content;
@@ -114,11 +114,11 @@ impl<'a> From<PoisonError<RwLockWriteGuard<'a, Inner>>> for Error {
 #[cfg(test)]
 mod tests {
     use super::Storage;
-    use cas::hash::Hash;
-    use cas::traits::CAS;
+    use crate::cas::hash::Hash;
+    use crate::cas::traits::CAS;
     use std::thread;
     use std::sync::Arc;
-    use util::test::init_env_logger;
+    use crate::util::test::init_env_logger;
 
     #[test]
     fn put_get_strings() {
