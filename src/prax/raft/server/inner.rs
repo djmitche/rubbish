@@ -1,3 +1,5 @@
+#[cfg(feature="debugging")]
+use log::debug;
 use super::control::Control;
 use super::handlers;
 use super::message::Message;
@@ -399,7 +401,7 @@ where
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        println!("{}: {} - {}", millis, self.log_prefix, msg.as_ref());
+        debug!("{}: {} - {}", millis, self.log_prefix, msg.as_ref());
     }
 
     #[cfg(not(feature="debugging"))]

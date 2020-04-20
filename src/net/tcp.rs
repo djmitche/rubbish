@@ -1,3 +1,4 @@
+use log::debug;
 use crate::net::{Message, NodeId, NetworkNode};
 use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
@@ -47,9 +48,6 @@ use tokio::time::delay_for;
  *    the peer's task to stop.  The node uses this channel to stop all peer tasks before stopping
  *    itself.
  */
-
-// set this to true to add a lot of println!
-const DEBUG: bool = false;
 
 /// A TcpConfig is a vector of nodes in the network, giving the address at which that node is
 /// listening.
@@ -284,8 +282,8 @@ impl TcpNodeInner {
     }
 
     fn log<S: AsRef<str>>(&self, msg: S) {
-        if cfg!(debug) && DEBUG {
-            println!("node={} - {}", self.node_id, msg.as_ref());
+        if cfg!(debug) {
+            debug!("node={} - {}", self.node_id, msg.as_ref());
         }
     }
 }
@@ -530,8 +528,8 @@ impl TcpPeerInner {
     }
 
     fn log<S: AsRef<str>>(&self, msg: S) {
-        if cfg!(test) && DEBUG {
-            println!(
+        if cfg!(test) {
+            debug!(
                 "node={} peer={} - {}",
                 self.node_id,
                 self.peer_node_id,
