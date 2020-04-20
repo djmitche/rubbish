@@ -4,8 +4,11 @@ use failure::Fallible;
 pub mod local;
 pub mod tcp;
 
+/// An identifier for a node in the network.  These identifiers are global to the network
+/// and must be managed externally.
 pub type NodeId = usize;
 
+/// A message to be sent or received on the network.
 pub type Message = Vec<u8>;
 
 #[async_trait]
