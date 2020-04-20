@@ -1,4 +1,4 @@
-use crate::net::{Message, NodeId, RaftNetworkNode};
+use crate::net::{Message, NodeId, NetworkNode};
 use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
 use failure::Fallible;
@@ -17,7 +17,7 @@ use tokio::time::delay_for;
  *
  * A network is composed of multiple nodes.  Typically only one node is running in a process, but
  * during testing multiple nodes may coexist within a single process.  This is represented by a
- * TcpNode, which implements RaftNetworkNode.
+ * TcpNode, which implements NetworkNode.
  *
  * The node has a TcpPeer object for each node on the network (including itself) that handles
  * communication with that peer.
@@ -55,7 +55,7 @@ const DEBUG: bool = false;
 /// listening.
 pub type TcpConfig = Vec<SocketAddr>;
 
-/// A node on a TCP network, implementing RaftNetworkNode.
+/// A node on a TCP network, implementing NetworkNode.
 pub struct TcpNode {
     /// Size of this network
     network_size: usize,
@@ -196,7 +196,7 @@ impl TcpNode {
 }
 
 #[async_trait]
-impl RaftNetworkNode for TcpNode {
+impl NetworkNode for TcpNode {
     fn network_size(&self) -> usize {
         self.network_size
     }

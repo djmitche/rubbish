@@ -1,5 +1,5 @@
 use crate::prax::raft::diststate::DistributedState;
-use crate::net::RaftNetworkNode;
+use crate::net::NetworkNode;
 use failure::Fallible;
 use tokio::sync::mpsc;
 use tokio::task;
@@ -32,7 +32,7 @@ where
 {
     pub fn new<NODE>(node: NODE) -> RaftServer<DS>
     where
-        NODE: RaftNetworkNode + Sync + Send + 'static,
+        NODE: NetworkNode + Sync + Send + 'static,
     {
         let (control_tx_in, control_rx_in) = mpsc::channel(1);
         let (control_tx_out, control_rx_out) = mpsc::channel(1);

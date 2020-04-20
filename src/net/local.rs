@@ -1,4 +1,4 @@
-use crate::net::{Message, NodeId, RaftNetworkNode};
+use crate::net::{Message, NodeId, NetworkNode};
 use async_trait::async_trait;
 use failure::Fallible;
 use tokio::sync::mpsc;
@@ -40,7 +40,7 @@ impl LocalNetwork {
     }
 }
 
-/// A node in the local network, implementing RaftNetworkNode.
+/// A node in the local network, implementing NetworkNode.
 pub struct LocalNode {
     network_size: usize,
     node_id: NodeId,
@@ -49,7 +49,7 @@ pub struct LocalNode {
 }
 
 #[async_trait]
-impl RaftNetworkNode for LocalNode {
+impl NetworkNode for LocalNode {
     fn network_size(&self) -> usize {
         self.network_size
     }

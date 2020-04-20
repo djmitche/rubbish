@@ -4,7 +4,7 @@ use super::message::Message;
 use super::state::{Mode, RaftState};
 use crate::prax::raft::diststate::{DistributedState};
 use crate::prax::raft::log::RaftLog;
-use crate::net::{NodeId, RaftNetworkNode};
+use crate::net::{NodeId, NetworkNode};
 use crate::prax::raft::Index;
 use failure::Fallible;
 use rand::{thread_rng, Rng};
@@ -38,7 +38,7 @@ const HEARTBEAT: Duration = Duration::from_millis(200);
 /// transient channel to carry the response.
 pub(super) struct RaftServerInner<NODE, DS>
 where
-    NODE: RaftNetworkNode + Sync + Send + 'static,
+    NODE: NetworkNode + Sync + Send + 'static,
     DS: DistributedState,
 {
     /*
@@ -84,7 +84,7 @@ enum Timer {
 
 impl<NODE, DS> RaftServerInner<NODE, DS>
 where
-    NODE: RaftNetworkNode + Sync + Send + 'static,
+    NODE: NetworkNode + Sync + Send + 'static,
     DS: DistributedState,
 {
     pub(super) fn new(

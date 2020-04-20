@@ -9,7 +9,7 @@ pub type NodeId = usize;
 pub type Message = Vec<u8>;
 
 #[async_trait]
-pub trait RaftNetworkNode {
+pub trait NetworkNode {
     /// Get the size of the network (number of nodes)
     fn network_size(&self) -> usize;
 
