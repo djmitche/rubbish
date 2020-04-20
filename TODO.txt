@@ -1,6 +1,5 @@
 # Next
 
-* Switch rest of rubbish to use Failure
 * Generalize net to allow adding/removing nodes
 * Implement CAS with internal storage, refcounting
 

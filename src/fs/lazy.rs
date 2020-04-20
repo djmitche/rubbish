@@ -1,4 +1,4 @@
-use super::error::*;
+use failure::Fallible;
 use super::fs::FileSystem;
 use crate::cas::Hash;
 use crate::cas::CAS;
@@ -38,10 +38,10 @@ where
 /// methods to retrieve and store the content in a FileSystem.
 pub trait LazyContent<'f, ST: 'f + CAS>: Sized {
     /// Retrive this content from the given FileSystem
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self>;
+    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<Self>;
 
     /// Store the content in the given FileSystem, returning its hash
-    fn store_in<'a>(&'a self, fs: &'f FileSystem<'f, ST>) -> Result<Hash>;
+    fn store_in<'a>(&'a self, fs: &'f FileSystem<'f, ST>) -> Fallible<Hash>;
 }
 
 impl<'f, ST: 'f + CAS, T> LazyHashedObject<'f, ST, T>
@@ -61,7 +61,7 @@ where
     }
 
     /// Get the hash for this object, writing its content to the FileSystem first if necessary.
-    pub fn hash(&self, fs: &'f FileSystem<'f, ST>) -> Result<&Hash> {
+    pub fn hash(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<&Hash> {
         let mut borrow = self.0.borrow_mut();
         let h = borrow.hash(fs)?;
         Ok(unsafe {
@@ -71,7 +71,7 @@ where
     }
 
     /// Get the content of this object, retrieving it from the FileSystem first if necessary.
-    pub fn content(&self, fs: &'f FileSystem<'f, ST>) -> Result<&T> {
+    pub fn content(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<&T> {
         let mut borrow = self.0.borrow_mut();
         let c = borrow.content(fs)?;
         Ok(unsafe {
@@ -126,7 +126,7 @@ where
 
     /// Ensure that self.hash is not None. This may write the commit to storage,
     /// so it may fail and thus returns a Result.
-    fn ensure_hash<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Result<()> {
+    fn ensure_hash<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<()> {
         if let Some(_) = self.hash {
             return Ok(());
         }
@@ -141,7 +141,7 @@ where
         }
     }
 
-    fn hash(&mut self, fs: &'f FileSystem<'f, ST>) -> Result<&Hash> {
+    fn hash(&mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<&Hash> {
         self.ensure_hash(fs)?;
         match self.hash {
             None => unreachable!(),
@@ -156,7 +156,7 @@ where
 
     /// Ensure that self.content is not None.  This may require reading the content
     /// from storage, so it may fail and thus returns a result.
-    fn ensure_content<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Result<()> {
+    fn ensure_content<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<()> {
         if let Some(_) = self.content {
             return Ok(());
         }
@@ -171,7 +171,7 @@ where
         }
     }
 
-    fn content(&mut self, fs: &'f FileSystem<'f, ST>) -> Result<&T> {
+    fn content(&mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<&T> {
         self.ensure_content(fs)?;
         match self.content {
             None => unreachable!(),
@@ -199,12 +199,12 @@ mod test {
     where
         ST: 'f + CAS,
     {
-        fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self> {
+        fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<Self> {
             let val: TestContent = fs.storage.retrieve(hash)?;
             Ok(val)
         }
 
-        fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Result<Hash> {
+        fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<Hash> {
             Ok(fs.storage.store(self)?)
         }
     }
@@ -248,7 +248,7 @@ mod test {
 
         // and retrieve it as a lazy object
         let lho = LazyHashedObject::for_hash(&Hash::from_hex(HELLO_WORLD_HASH));
-        let res: Result<&TestContent> = lho.content(&fs);
+        let res: Fallible<&TestContent> = lho.content(&fs);
         assert!(res.is_err());
     }
 }

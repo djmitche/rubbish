@@ -1,4 +1,4 @@
-use super::error::*;
+use failure::Fallible;
 use super::hash::Hash;
 use rustc_serialize::{Decodable, Encodable};
 
@@ -33,18 +33,18 @@ pub trait CAS {
     ///
     /// Inserting the same value twice will result in the same Hash (and no additional use of
     /// space).
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash>;
+    fn store<T: Encodable + Decodable>(&self, value: &T) -> Fallible<Hash>;
 
     /// Retrieve a value by hash.
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T>;
+    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Fallible<T>;
 
     /// Mark a value as part of the current garbage-collection generation.  This will fetch
     /// the value from another node if necessary and thus may fail.
-    fn touch(&self, hash: &Hash) -> Result<()>;
+    fn touch(&self, hash: &Hash) -> Fallible<()>;
 
     /// Begin a garbage collection round.  Before dropping the resulting `GarbageCollection`
     /// instance, `touch` or `store` all non-garbage objects.
-    fn begin_gc(&self) -> Result<()>;
+    fn begin_gc(&self) -> Fallible<()>;
 
     /// Complete a garbage collection round.  This should be called exactly once per call
     /// to `begin_gc`.  Use `GarbageCycle` to ensure this.

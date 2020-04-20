@@ -1,4 +1,4 @@
-use super::error::*;
+use failure::Fallible;
 use super::lazy::{LazyHashedObject, LazyContent};
 use super::fs::FileSystem;
 use super::tree::Tree;
@@ -58,7 +58,7 @@ where
     }
 
     /// Make a new commit that is a child of this one, with the given tree
-    pub fn make_child(self: Commit<'f, ST>, tree: Tree<'f, ST>) -> Result<Commit<'f, ST>> {
+    pub fn make_child(self: Commit<'f, ST>, tree: Tree<'f, ST>) -> Fallible<Commit<'f, ST>> {
         let fs = self.fs;
         let content = CommitContent {
             parents: vec![self],
@@ -71,18 +71,18 @@ where
     }
 
     /// Get the hash for this commit
-    pub fn hash(&self) -> Result<&Hash> {
+    pub fn hash(&self) -> Fallible<&Hash> {
         self.inner.hash(self.fs)
     }
 
     /// Get the parents of this commit
-    pub fn parents(&self) -> Result<&[Commit<'f, ST>]> {
+    pub fn parents(&self) -> Fallible<&[Commit<'f, ST>]> {
         let content = self.inner.content(self.fs)?;
         Ok(&content.parents[..])
     }
 
     /// Get the Tree associated with this commit
-    pub fn tree(&self) -> Result<Tree<'f, ST>> {
+    pub fn tree(&self) -> Fallible<Tree<'f, ST>> {
         let content = self.inner.content(self.fs)?;
         Ok(content.tree.clone())
     }
@@ -101,7 +101,7 @@ impl<'f, ST> LazyContent<'f, ST> for CommitContent<'f, ST>
 where
     ST: 'f + CAS,
 {
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<CommitContent<'f, ST>> {
+    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<CommitContent<'f, ST>> {
         let raw: RawCommit = fs.storage.retrieve(hash)?;
 
         let mut parents: Vec<Commit<'f, ST>> = vec![];
@@ -115,7 +115,7 @@ where
         })
     }
 
-    fn store_in(&self, fs: &FileSystem<'f, ST>) -> Result<Hash> {
+    fn store_in(&self, fs: &FileSystem<'f, ST>) -> Fallible<Hash> {
         let mut parent_hashes: Vec<Hash> = vec![];
         parent_hashes.reserve(self.parents.len());
         for p in self.parents.iter() {

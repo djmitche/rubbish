@@ -1,12 +1,6 @@
-use cas;
-use fs;
+use failure::Fail;
+use crate::cas;
 
-error_chain! {
-    errors {
-    }
-
-    foreign_links {
-        Cas(cas::Error);
-        FS(fs::Error);
-    }
+#[derive(Debug, Fail)]
+pub enum Error {
 }

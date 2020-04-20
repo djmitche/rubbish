@@ -1,7 +1,7 @@
 //! Support for garbage collection cycles.
 
 use super::traits::CAS;
-use super::error::*;
+use failure::Fallible;
 
 /// Type GarbageCycle represents a garbage-collection cycle.  Between creation and destruction of
 /// an object of this type, touch or store every non-garbage object.  Any objects not touched
@@ -30,7 +30,7 @@ pub struct GarbageCycle<'a, ST: 'a + CAS> {
 }
 
 impl<'a, ST: 'a + CAS> GarbageCycle<'a, ST> {
-    pub fn new(storage: &'a ST) -> Result<GarbageCycle<'a, ST>> {
+    pub fn new(storage: &'a ST) -> Fallible<GarbageCycle<'a, ST>> {
         storage.begin_gc()?;
         Ok(GarbageCycle { storage: storage })
     }

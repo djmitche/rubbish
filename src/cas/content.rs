@@ -1,5 +1,5 @@
 use super::hash::Hash;
-use super::error::*;
+use failure::Fallible;
 use rustc_serialize::{Decodable, Encodable};
 use bincode::SizeLimit;
 use bincode::rustc_serialize::{encode, decode};
@@ -9,10 +9,8 @@ use bincode::rustc_serialize::{encode, decode};
 pub struct Content(Vec<u8>);
 
 impl Content {
-    pub fn new<T: Encodable + Decodable>(value: &T) -> Result<Content> {
-        let encoded = encode(value, SizeLimit::Infinite).chain_err(
-            || "Error encoding object",
-        )?;
+    pub fn new<T: Encodable + Decodable>(value: &T) -> Fallible<Content> {
+        let encoded = encode(value, SizeLimit::Infinite)?;
         Ok(Content(encoded))
     }
 
@@ -20,8 +18,8 @@ impl Content {
         Hash::for_bytes(&self.0)
     }
 
-    pub fn decode<T: Encodable + Decodable>(&self) -> Result<T> {
-        decode(&self.0).chain_err(|| "Error decoding object")
+    pub fn decode<T: Encodable + Decodable>(&self) -> Fallible<T> {
+        Ok(decode(&self.0)?)
     }
 }
 

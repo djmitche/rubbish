@@ -1,11 +1,11 @@
-use super::error::*;
+use log::debug;
+use failure::{bail, err_msg, Fallible};
 use super::hash::Hash;
 use super::traits::CAS;
 use super::content::Content;
 use std::collections::HashMap;
-use std::sync::{RwLock, PoisonError, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::RwLock;
 use rustc_serialize::{Decodable, Encodable};
-use std::convert::From;
 
 /// Type Storage provides a distributed content-addressible storage pool.  The content
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
@@ -30,8 +30,8 @@ impl Storage {
 }
 
 impl CAS for Storage {
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Result<Hash> {
-        let mut inner = self.0.write()?;
+    fn store<T: Encodable + Decodable>(&self, value: &T) -> Fallible<Hash> {
+        let mut inner = self.0.write().map_err(|_| err_msg("Lock Poisoned"))?;
 
         let cur_generation = inner.cur_generation;
         let content = Content::new(value)?;
@@ -43,8 +43,8 @@ impl CAS for Storage {
         Ok(hash)
     }
 
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Result<T> {
-        let inner = self.0.read()?;
+    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Fallible<T> {
+        let inner = self.0.read().map_err(|_| err_msg("Lock Poisoned"))?;
 
         debug!("retrieve content with hash {:?}", hash);
         match inner.map.get(hash) {
@@ -53,8 +53,8 @@ impl CAS for Storage {
         }
     }
 
-    fn touch(&self, hash: &Hash) -> Result<()> {
-        let mut inner = self.0.write()?;
+    fn touch(&self, hash: &Hash) -> Fallible<()> {
+        let mut inner = self.0.write().map_err(|_| err_msg("Lock Poisoned"))?;
 
         debug!("touch content with hash {:?}", hash);
         let cur_generation = inner.cur_generation;
@@ -67,8 +67,8 @@ impl CAS for Storage {
         }
     }
 
-    fn begin_gc(&self) -> Result<()> {
-        let mut inner = self.0.write()?;
+    fn begin_gc(&self) -> Fallible<()> {
+        let mut inner = self.0.write().map_err(|_| err_msg("Lock Poisoned"))?;
         inner.cur_generation += 1;
         debug!("begin_gc: cur_generation={}", inner.cur_generation);
         Ok(())
@@ -96,6 +96,8 @@ impl CAS for Storage {
     }
 }
 
+/*
+
 // error-chain does not support generic errors in foreign_links, so these
 // implementations will reflect a PoisonError into a cas::Error.
 
@@ -110,6 +112,7 @@ impl<'a> From<PoisonError<RwLockWriteGuard<'a, Inner>>> for Error {
         ErrorKind::LockError(format!("{}", e)).into()
     }
 }
+*/
 
 #[cfg(test)]
 mod tests {

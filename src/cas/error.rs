@@ -1,12 +1,7 @@
+use failure::Fail;
 
-error_chain! {
-    errors {
-        LockError(msg: String) {
-            description("lock error")
-            display("lock error: '{}'", msg)
-        }
-    }
-
-    foreign_links {
-    }
+#[derive(Debug, Fail)]
+pub enum Error {
+    #[fail(display = "Lock Error: {}", _0)]
+    LockError(String),
 }

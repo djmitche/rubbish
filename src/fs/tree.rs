@@ -1,4 +1,4 @@
-use super::error::*;
+use failure::Fallible;
 use super::lazy::{LazyHashedObject, LazyContent};
 use super::fs::FileSystem;
 use std::collections::HashMap;
@@ -66,18 +66,18 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     }
 
     /// Get the hash for this tree
-    pub fn hash(&self) -> Result<&Hash> {
+    pub fn hash(&self) -> Fallible<&Hash> {
         self.inner.hash(self.fs)
     }
 
     /// Get the children of this tree.
-    pub fn children(&self) -> Result<&HashMap<String, Tree<'f, ST>>> {
+    pub fn children(&self) -> Fallible<&HashMap<String, Tree<'f, ST>>> {
         let content = self.inner.content(self.fs)?;
         Ok(&content.children)
     }
 
     /// Get the data at this tree.
-    pub fn data(&self) -> Result<Option<&str>> {
+    pub fn data(&self) -> Fallible<Option<&str>> {
         let content = self.inner.content(self.fs)?;
         Ok(match content.data {
             None => None,
@@ -95,7 +95,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write(&self, path: &[&str], data: String) -> Result<Tree<'f, ST>> {
+    pub fn write(&self, path: &[&str], data: String) -> Fallible<Tree<'f, ST>> {
         self.modify(path, Some(data))
     }
 
@@ -107,12 +107,12 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, path: &[&str]) -> Result<Tree<'f, ST>> {
+    pub fn remove(self, path: &[&str]) -> Fallible<Tree<'f, ST>> {
         self.modify(path, None)
     }
 
     /// Read the value at the given path in this tree, if it is set.
-    pub fn read(&self, path: &[&str]) -> Result<Option<&str>> {
+    pub fn read(&self, path: &[&str]) -> Fallible<Option<&str>> {
         if path.len() > 0 {
             match self.children()?.get(path[0]) {
                 None => Ok(None),
@@ -125,7 +125,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
 
     /// Set the data at the given path, returning a new Tree that shares some nodes with the
     /// original via path copying.
-    fn modify(&self, path: &[&str], data: Option<String>) -> Result<Tree<'f, ST>> {
+    fn modify(&self, path: &[&str], data: Option<String>) -> Fallible<Tree<'f, ST>> {
         if path.len() > 0 {
             let elt = path[0];
             let mut newchildren = self.children()?.clone();
@@ -192,11 +192,11 @@ impl<'f, ST: 'f + CAS> Debug for Tree<'f, ST> {
     fn fmt(&self, f: &mut Formatter) -> StdResult<(), FmtError> {
         write!(f, "Tree")?;
         if self.inner.has_hash() {
-            write!(f, "@{:?}", self.hash()?)?;
+            write!(f, "@{:?}", self.hash().map_err(|_| FmtError)?)?;
         }
         if self.inner.has_content() {
-            write!(f, " [{:?}", self.data()?)?;
-            let children = self.children()?;
+            write!(f, " [{:?}", self.data().map_err(|_| FmtError)?)?;
+            let children = self.children().map_err(|_| FmtError)?;
             let mut names: Vec<&String> = children.keys().collect();
             names.sort();
             for name in names.drain(..) {
@@ -212,7 +212,7 @@ impl<'f, ST> LazyContent<'f, ST> for TreeContent<'f, ST>
 where
     ST: 'f + CAS,
 {
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Result<Self> {
+    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<Self> {
         let raw: RawTree = fs.storage.retrieve(hash)?;
         let mut children: HashMap<String, Tree<'f, ST>> = HashMap::new();
         for elt in raw.children.iter() {
@@ -224,7 +224,7 @@ where
         })
     }
 
-    fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Result<Hash> {
+    fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<Hash> {
         let mut children: Vec<(String, Hash)> = vec![];
         children.reserve(self.children.len());
         for (k, v) in self.children.iter() {

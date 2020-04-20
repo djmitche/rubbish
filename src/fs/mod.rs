@@ -5,6 +5,7 @@
 //!
 //! ```
 //! use rubbish::cas::{Storage, CAS};
+//! use failure::Fallible;
 //! use rubbish::fs::{FileSystem, Commit, Error};
 //! let storage = Storage::new();
 //! let fs = FileSystem::new(&storage);
@@ -12,7 +13,7 @@
 //! fn child<'f, ST: 'f + CAS>(parent: Commit<'f, ST>,
 //!                           path: &[&str],
 //!                           data: String)
-//!                           -> Result<Commit<'f, ST>, Error> {
+//!                           -> Fallible<Commit<'f, ST>> {
 //!     let child_tree = parent.tree()?.write(path, data)?;
 //!     let child = parent.make_child(child_tree)?;
 //!     Ok(child)
