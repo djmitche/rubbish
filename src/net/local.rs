@@ -50,12 +50,18 @@ pub struct LocalNode {
 
 #[async_trait]
 impl NetworkNode for LocalNode {
+    type Address = usize;
+
     fn network_size(&self) -> usize {
         self.network_size
     }
 
     fn node_id(&self) -> NodeId {
         self.node_id
+    }
+
+    fn address_of(&self, node: NodeId) -> Option<NodeId> {
+        Some(node)
     }
 
     async fn send(&mut self, dest: NodeId, msg: Message) -> Fallible<()> {

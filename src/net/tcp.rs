@@ -57,8 +57,8 @@ pub type TcpConfig = Vec<SocketAddr>;
 
 /// A node on a TCP network, implementing NetworkNode.
 pub struct TcpNode {
-    /// Size of this network
-    network_size: usize,
+    /// Nodes in this network
+    config: TcpConfig,
 
     /// This node's ID
     node_id: NodeId,
@@ -180,7 +180,7 @@ impl TcpNode {
         // start up a task that owns the inner, referenced by the JoinHandle
         // in the node
         TcpNode {
-            network_size,
+            config,
             node_id,
             outgoing_tx,
             incoming_rx,
@@ -197,12 +197,18 @@ impl TcpNode {
 
 #[async_trait]
 impl NetworkNode for TcpNode {
+    type Address = SocketAddr;
+
     fn network_size(&self) -> usize {
-        self.network_size
+        self.config.len()
     }
 
     fn node_id(&self) -> NodeId {
         self.node_id
+    }
+
+    fn address_of(&self, node: NodeId) -> Option<Self::Address> {
+        self.config.get(node).cloned()
     }
 
     async fn send(&mut self, dest: NodeId, msg: Message) -> Fallible<()> {
@@ -578,6 +584,27 @@ mod test {
         assert_eq!(node_id, 0);
         assert_eq!(msg, b"Hello");
         node.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_net_size() {
+        let socket0 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let cfg = vec![socket0, socket1];
+        let node0 = TcpNode::new(0, cfg.clone());
+        assert_eq!(node0.network_size(), 2);
+        node0.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_addr_of() {
+        let socket0 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let socket1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), fresh_port());
+        let cfg = vec![socket0, socket1];
+        let node0 = TcpNode::new(0, cfg.clone());
+        assert_eq!(node0.address_of(0), Some(socket0));
+        assert_eq!(node0.address_of(1), Some(socket1));
+        node0.stop().await;
     }
 
     #[tokio::test]
