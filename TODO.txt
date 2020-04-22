@@ -1,7 +1,11 @@
 # Next
 
-* Generalize net to allow adding/removing nodes
+* Make everything async
+
+# CAS
+
 * Implement CAS with internal storage, refcounting
+* Switch from rustc_serialize to serde
 
 # Raft
 
@@ -50,3 +54,7 @@
 * use either net2 or nix, not both
 * Figure out how to do a nonblocking connect with a socket from net2
 * Make the wait state back off up to 1000ms or something
+
+## Config Changes
+
+* Generalize net to allow adding/removing nodes

@@ -19,43 +19,20 @@
 //! # Examples
 //!
 //! ```
+//! use tokio;
 //! use rubbish::cas::CAS;
-//! let mut storage = rubbish::cas::Storage::new();
 //!
-//! // store some things
-//! let hash42 = storage.store(&42u32).unwrap();
-//! let hash314 = storage.store(&"π".to_string()).unwrap();
+//! #[tokio::main]
+//! async fn main() {
+//!   let mut storage = rubbish::cas::Storage::new();
 //!
-//! // and retrieve them, by type
-//! assert_eq!(storage.retrieve::<u32>(&hash42).unwrap(), 42u32);
-//! assert_eq!(storage.retrieve::<String>(&hash314).unwrap(), "π".to_string());
-//! ```
+//!   // store some things
+//!   let hash42 = storage.store(&42u32).unwrap();
+//!   let hash314 = storage.store(&"π".to_string()).unwrap();
 //!
-//! An example with a custom type, and using Arc to refer to Storage from multiple
-//! threads:
-//!
-//! ```
-//! extern crate rustc_serialize;
-//! extern crate rubbish;
-//!
-//! use std::sync::Arc;
-//! use std::thread;
-//! use rubbish::cas::{CAS, Storage};
-//! use rustc_serialize::{Decodable, Encodable};
-//!
-//! #[derive(Debug, RustcEncodable, RustcDecodable, PartialEq)]
-//! struct Data(u32, u32);
-//!
-//! fn main() {
-//!   let mut storage = Arc::new(Storage::new());
-//!
-//!   let thd = thread::spawn(move || {
-//!     let hash = storage.store(&Data(10, 20)).unwrap();
-//!     let result: Data = storage.retrieve(&hash).unwrap();
-//!     assert_eq!(result, Data(10, 20));
-//!   });
-//!
-//!   thd.join().unwrap();
+//!   // and retrieve them, by type
+//!   assert_eq!(storage.retrieve::<u32>(&hash42).unwrap(), 42u32);
+//!   assert_eq!(storage.retrieve::<String>(&hash314).unwrap(), "π".to_string());
 //! }
 //! ```
 
