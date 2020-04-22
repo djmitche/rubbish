@@ -11,19 +11,22 @@ use failure::Fallible;
 ///
 /// ```
 /// use rubbish::cas::{Storage, GarbageCycle, CAS};
-/// let mut storage = Storage::new();
+/// #[tokio::main]
+/// async fn main() {
+///   let mut storage = Storage::new();
 ///
-/// let hash1 = storage.store(&"abc".to_string()).unwrap();
-/// let hash2 = storage.store(&"def".to_string()).unwrap();
-/// let hash3;
-/// {
-///     let gc = GarbageCycle::new(&storage);
-///     hash3 = storage.store(&"ghi".to_string()).unwrap();
-///     storage.touch(&hash1).unwrap();
+///   let hash1 = storage.store(&"abc".to_string()).await.unwrap();
+///   let hash2 = storage.store(&"def".to_string()).await.unwrap();
+///   let hash3;
+///   {
+///       let gc = GarbageCycle::new(&storage);
+///       hash3 = storage.store(&"ghi".to_string()).await.unwrap();
+///     storage.touch(&hash1).await.unwrap();
+///   }
+///   
+///   // hash2 has been garbage-collected..
+///   assert!(storage.retrieve::<String>(&hash2).await.is_err());
 /// }
-///
-/// // hash2 has been garbage-collected..
-/// assert!(storage.retrieve::<String>(&hash2).is_err());
 /// ```
 pub struct GarbageCycle<'a, ST: 'a + CAS> {
     storage: &'a ST,

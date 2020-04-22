@@ -1,14 +1,14 @@
 // temp
 #![allow(dead_code)]
 
-extern crate crypto;
 extern crate bincode;
-extern crate rustc_serialize;
-extern crate log;
+extern crate crypto;
 extern crate env_logger;
+extern crate log;
+extern crate rustc_serialize;
 
 pub mod cas;
-pub mod fs;
+//pub mod fs;
 pub mod prax;
 
 pub mod net;

@@ -1,11 +1,13 @@
 # Next
 
 * Make everything async
+* Use Boxes between major components
 
 # CAS
 
 * Implement CAS with internal storage, refcounting
 * Switch from rustc_serialize to serde
+* use a single type for the stored values (so callers should use an enum)
 
 # Raft
 

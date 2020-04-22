@@ -1,6 +1,7 @@
 use super::content::Content;
 use super::hash::Hash;
 use super::traits::CAS;
+use async_trait::async_trait;
 use failure::{bail, err_msg, Fallible};
 use log::debug;
 use rustc_serialize::{Decodable, Encodable};
@@ -29,8 +30,9 @@ impl Storage {
     }
 }
 
+#[async_trait]
 impl CAS for Storage {
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Fallible<Hash> {
+    async fn store<T: Encodable + Decodable + Sync>(&self, value: &T) -> Fallible<Hash> {
         let mut inner = self.0.write().map_err(|_| err_msg("Lock Poisoned"))?;
 
         let cur_generation = inner.cur_generation;
@@ -43,7 +45,7 @@ impl CAS for Storage {
         Ok(hash)
     }
 
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Fallible<T> {
+    async fn retrieve<T: Encodable + Decodable + Sync>(&self, hash: &Hash) -> Fallible<T> {
         let inner = self.0.read().map_err(|_| err_msg("Lock Poisoned"))?;
 
         debug!("retrieve content with hash {:?}", hash);
@@ -53,7 +55,7 @@ impl CAS for Storage {
         }
     }
 
-    fn touch(&self, hash: &Hash) -> Fallible<()> {
+    async fn touch(&self, hash: &Hash) -> Fallible<()> {
         let mut inner = self.0.write().map_err(|_| err_msg("Lock Poisoned"))?;
 
         debug!("touch content with hash {:?}", hash);
@@ -96,124 +98,77 @@ impl CAS for Storage {
     }
 }
 
-/*
-
-// error-chain does not support generic errors in foreign_links, so these
-// implementations will reflect a PoisonError into a cas::Error.
-
-impl<'a> From<PoisonError<RwLockReadGuard<'a, Inner>>> for Error {
-    fn from(e: PoisonError<RwLockReadGuard<'a, Inner>>) -> Self {
-        ErrorKind::LockError(format!("{}", e)).into()
-    }
-}
-
-impl<'a> From<PoisonError<RwLockWriteGuard<'a, Inner>>> for Error {
-    fn from(e: PoisonError<RwLockWriteGuard<'a, Inner>>) -> Self {
-        ErrorKind::LockError(format!("{}", e)).into()
-    }
-}
-*/
-
 #[cfg(test)]
 mod tests {
     use super::Storage;
     use crate::cas::hash::Hash;
     use crate::cas::traits::CAS;
     use crate::util::test::init_env_logger;
-    use std::sync::Arc;
-    use std::thread;
 
-    #[test]
-    fn put_get_strings() {
+    #[tokio::test]
+    async fn put_get_strings() {
         init_env_logger();
 
         let storage = Storage::new();
 
-        let hash1 = storage.store(&"one".to_string()).unwrap();
-        let hash2 = storage.store(&"two".to_string()).unwrap();
+        let hash1 = storage.store(&"one".to_string()).await.unwrap();
+        let hash2 = storage.store(&"two".to_string()).await.unwrap();
         let badhash = Hash::from_hex("000000");
 
         assert_eq!(
-            storage.retrieve::<String>(&hash1).unwrap(),
+            storage.retrieve::<String>(&hash1).await.unwrap(),
             "one".to_string()
         );
         assert_eq!(
-            storage.retrieve::<String>(&hash2).unwrap(),
+            storage.retrieve::<String>(&hash2).await.unwrap(),
             "two".to_string()
         );
-        assert!(storage.retrieve::<String>(&badhash).is_err());
+        assert!(storage.retrieve::<String>(&badhash).await.is_err());
     }
 
-    #[test]
-    fn test_parallel_access() {
-        let storage = Arc::new(Storage::new());
-
-        fn thd(storage: Arc<Storage>) {
-            let mut hashes = vec![];
-            for i in 0..100 {
-                hashes.push(storage.store::<usize>(&i).unwrap());
-            }
-            for i in 0..100 {
-                let hash = &hashes[i];
-                let val = storage.retrieve::<usize>(&hash).unwrap();
-                assert_eq!(val, i);
-            }
-        };
-
-        let mut threads = vec![];
-        for _ in 0..10 {
-            let storage = storage.clone();
-            threads.push(thread::spawn(move || thd(storage)));
-        }
-
-        for thd in threads {
-            thd.join().unwrap();
-        }
-    }
-
-    #[test]
-    fn put_twice() {
+    #[tokio::test]
+    async fn put_twice() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"xyz".to_string()).unwrap();
-        let hash2 = storage.store(&"xyz".to_string()).unwrap();
+        let hash1 = storage.store(&"xyz".to_string()).await.unwrap();
+        let hash2 = storage.store(&"xyz".to_string()).await.unwrap();
         assert_eq!(hash1, hash2);
     }
 
-    #[test]
-    fn touch() {
+    #[tokio::test]
+    async fn touch() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"xyz".to_string()).unwrap();
-        storage.touch(&hash1).unwrap();
+        let hash1 = storage.store(&"xyz".to_string()).await.unwrap();
+        storage.touch(&hash1).await.unwrap();
     }
 
-    #[test]
-    fn touch_fails() {
+    #[tokio::test]
+    async fn touch_fails() {
         let storage = super::Storage::new();
 
-        assert!(storage.touch(&Hash::from_hex("1234")).is_err());
+        assert!(storage.touch(&Hash::from_hex("1234")).await.is_err());
     }
 
-    #[test]
-    fn gc() {
+    #[tokio::test]
+    async fn gc() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"abc".to_string()).unwrap();
-        let hash2 = storage.store(&"def".to_string()).unwrap();
-        let hash3 = storage.store(&"ghi".to_string()).unwrap();
-        let hash4 = storage.store(&"jkl".to_string()).unwrap();
+        let hash1 = storage.store(&"abc".to_string()).await.unwrap();
+        let hash2 = storage.store(&"def".to_string()).await.unwrap();
+        let hash3 = storage.store(&"ghi".to_string()).await.unwrap();
+        let hash4 = storage.store(&"jkl".to_string()).await.unwrap();
 
         storage.begin_gc().unwrap();
-        storage.touch(&hash1).unwrap();
-        storage.retrieve::<String>(&hash2).unwrap();
-        storage.store(&"ghi".to_string()).unwrap(); // hash3
+        storage.touch(&hash1).await.unwrap();
+        storage.retrieve::<String>(&hash2).await.unwrap();
+        storage.store(&"ghi".to_string()).await.unwrap(); // hash3
         storage.end_gc();
 
         // hash4 should be gone now
-        assert!(storage.retrieve::<String>(&hash1).is_ok()); // touched
-        assert!(storage.retrieve::<String>(&hash2).is_err()); // retrieved
-        assert!(storage.retrieve::<String>(&hash3).is_ok()); // stored
-        assert!(storage.retrieve::<String>(&hash4).is_err()); // not referenced
+        assert!(storage.retrieve::<String>(&hash1).await.is_ok()); // touched
+        assert!(storage.retrieve::<String>(&hash2).await.is_err()); // retrieved
+        assert!(storage.retrieve::<String>(&hash3).await.is_ok()); // stored
+        assert!(storage.retrieve::<String>(&hash4).await.is_err()); // not referenced
     }
 }

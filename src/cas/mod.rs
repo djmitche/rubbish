@@ -27,12 +27,12 @@
 //!   let mut storage = rubbish::cas::Storage::new();
 //!
 //!   // store some things
-//!   let hash42 = storage.store(&42u32).unwrap();
-//!   let hash314 = storage.store(&"π".to_string()).unwrap();
+//!   let hash42 = storage.store(&42u32).await.unwrap();
+//!   let hash314 = storage.store(&"π".to_string()).await.unwrap();
 //!
 //!   // and retrieve them, by type
-//!   assert_eq!(storage.retrieve::<u32>(&hash42).unwrap(), 42u32);
-//!   assert_eq!(storage.retrieve::<String>(&hash314).unwrap(), "π".to_string());
+//!   assert_eq!(storage.retrieve::<u32>(&hash42).await.unwrap(), 42u32);
+//!   assert_eq!(storage.retrieve::<String>(&hash314).await.unwrap(), "π".to_string());
 //! }
 //! ```
 

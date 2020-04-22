@@ -1,4 +1,5 @@
 use super::hash::Hash;
+use async_trait::async_trait;
 use failure::Fallible;
 use rustc_serialize::{Decodable, Encodable};
 
@@ -28,19 +29,20 @@ use rustc_serialize::{Decodable, Encodable};
 ///    file, and once the scan is complete any previous files can be discarded.
 ///
 /// Garbage collection runs can overlap, although this is not recommended.
+#[async_trait]
 pub trait CAS {
     /// Store a value into the storage pool, returning its hash.
     ///
     /// Inserting the same value twice will result in the same Hash (and no additional use of
     /// space).
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Fallible<Hash>;
+    async fn store<T: Encodable + Decodable + Sync>(&self, value: &T) -> Fallible<Hash>;
 
     /// Retrieve a value by hash.
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Fallible<T>;
+    async fn retrieve<T: Encodable + Decodable + Sync>(&self, hash: &Hash) -> Fallible<T>;
 
     /// Mark a value as part of the current garbage-collection generation.  This will fetch
     /// the value from another node if necessary and thus may fail.
-    fn touch(&self, hash: &Hash) -> Fallible<()>;
+    async fn touch(&self, hash: &Hash) -> Fallible<()>;
 
     /// Begin a garbage collection round.  Before dropping the resulting `GarbageCollection`
     /// instance, `touch` or `store` all non-garbage objects.
