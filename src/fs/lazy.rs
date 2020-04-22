@@ -1,9 +1,7 @@
 use super::fs::FileSystem;
 use crate::cas::Hash;
-use crate::cas::CAS;
 use failure::Fallible;
 use std::cell::RefCell;
-use std::marker::PhantomData;
 
 // TODO: use pub(crate)
 
@@ -12,43 +10,37 @@ use std::marker::PhantomData;
 /// only when requested; or it can be created with content, in which case the hash is only
 /// determined when requested (with the object stored in the FileSystem at that time).
 #[derive(Debug)]
-pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(
-    RefCell<LazyInner<'f, ST, T>>,
-);
+pub struct LazyHashedObject<T: LazyContent>(RefCell<LazyInner<T>>);
 
 /// LazyInner proivdes interior mutability for LazyHashedObject.
 ///
 /// INVARIANT α: at least one of `hash` and `content` is always `Some(_)`.
 /// INVARIANT β: a `Some(_)` value for `hash` or `content` is immutable.
 #[derive(Debug)]
-struct LazyInner<'f, ST: 'f + CAS, T>
+struct LazyInner<T>
 where
-    T: LazyContent<'f, ST>,
+    T: LazyContent,
 {
     /// The hash of this object, if it has already been calculated
     hash: Option<Hash>,
 
     /// The content of this object, if it has already been loaded
     content: Option<T>,
-
-    // use the type parameters, since rust does not consider a trait bound
-    // to be a "use' of a type paramter
-    _phantom: &'f PhantomData<ST>,
 }
 
 /// LazyContent bounds content that can be stored as a `LazyHashedObject`, providing
 /// methods to retrieve and store the content in a FileSystem.
-pub trait LazyContent<'f, ST: 'f + CAS>: Sized {
+pub trait LazyContent: Sized {
     /// Retrive this content from the given FileSystem
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<Self>;
+    fn retrieve_from(fs: &FileSystem, hash: &Hash) -> Fallible<Self>;
 
     /// Store the content in the given FileSystem, returning its hash
-    fn store_in<'a>(&'a self, fs: &'f FileSystem<'f, ST>) -> Fallible<Hash>;
+    fn store_in<'a>(&'a self, fs: &FileSystem) -> Fallible<Hash>;
 }
 
-impl<'f, ST: 'f + CAS, T> LazyHashedObject<'f, ST, T>
+impl<T> LazyHashedObject<T>
 where
-    T: LazyContent<'f, ST>,
+    T: LazyContent,
 {
     /// Create a new LazyHashedObject containing the given content.  This is a lazy operation, so
     /// no storage occurs until the object's hash is requested.
@@ -63,7 +55,7 @@ where
     }
 
     /// Get the hash for this object, writing its content to the FileSystem first if necessary.
-    pub fn hash(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<&Hash> {
+    pub fn hash(&self, fs: &FileSystem) -> Fallible<&Hash> {
         let mut borrow = self.0.borrow_mut();
         let h = borrow.hash(fs)?;
         Ok(unsafe {
@@ -73,7 +65,7 @@ where
     }
 
     /// Get the content of this object, retrieving it from the FileSystem first if necessary.
-    pub fn content(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<&T> {
+    pub fn content(&self, fs: &FileSystem) -> Fallible<&T> {
         let mut borrow = self.0.borrow_mut();
         let c = borrow.content(fs)?;
         Ok(unsafe {
@@ -94,27 +86,14 @@ where
     }
 }
 
-impl<'f, ST: 'f + CAS, T> LazyInner<'f, ST, T>
+impl<T> LazyInner<T>
 where
-    T: LazyContent<'f, ST>,
+    T: LazyContent,
 {
-    // Return a reference to PhantomData with the appropriate lifetime.  PhantomData is a zero-byte
-    // data structure, so lifetime isn't a relevant concept and upgrading its lifetime is a
-    // harmless hack.
-    fn phantom_hack() -> &'f PhantomData<ST> {
-        let zero_bytes_live_forever: &PhantomData<ST> = &PhantomData;
-        unsafe {
-            (zero_bytes_live_forever as *const PhantomData<ST>)
-                .as_ref()
-                .unwrap()
-        }
-    }
-
     fn for_content(content: T) -> Self {
         LazyInner {
             hash: None,
             content: Some(content),
-            _phantom: LazyInner::<'f, ST, T>::phantom_hack(),
         }
     }
 
@@ -122,13 +101,12 @@ where
         LazyInner {
             hash: Some(hash.clone()),
             content: None,
-            _phantom: LazyInner::<'f, ST, T>::phantom_hack(),
         }
     }
 
     /// Ensure that self.hash is not None. This may write the commit to storage,
     /// so it may fail and thus returns a Result.
-    fn ensure_hash<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<()> {
+    fn ensure_hash<'a>(&'a mut self, fs: &FileSystem) -> Fallible<()> {
         if let Some(_) = self.hash {
             return Ok(());
         }
@@ -143,7 +121,7 @@ where
         }
     }
 
-    fn hash(&mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<&Hash> {
+    fn hash(&mut self, fs: &FileSystem) -> Fallible<&Hash> {
         self.ensure_hash(fs)?;
         match self.hash {
             None => unreachable!(),
@@ -158,7 +136,7 @@ where
 
     /// Ensure that self.content is not None.  This may require reading the content
     /// from storage, so it may fail and thus returns a result.
-    fn ensure_content<'a>(&'a mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<()> {
+    fn ensure_content<'a>(&'a mut self, fs: &FileSystem) -> Fallible<()> {
         if let Some(_) = self.content {
             return Ok(());
         }
@@ -173,7 +151,7 @@ where
         }
     }
 
-    fn content(&mut self, fs: &'f FileSystem<'f, ST>) -> Fallible<&T> {
+    fn content(&mut self, fs: &FileSystem) -> Fallible<&T> {
         self.ensure_content(fs)?;
         match self.content {
             None => unreachable!(),
@@ -197,16 +175,13 @@ mod test {
     #[derive(Debug, RustcDecodable, RustcEncodable)]
     struct TestContent(String);
 
-    impl<'f, ST> LazyContent<'f, ST> for TestContent
-    where
-        ST: 'f + CAS,
-    {
-        fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<Self> {
+    impl LazyContent for TestContent {
+        fn retrieve_from(fs: &FileSystem, hash: &Hash) -> Fallible<Self> {
             let val: TestContent = fs.storage.retrieve(hash)?;
             Ok(val)
         }
 
-        fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<Hash> {
+        fn store_in(&self, fs: &FileSystem) -> Fallible<Hash> {
             Ok(fs.storage.store(self)?)
         }
     }

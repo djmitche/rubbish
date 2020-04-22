@@ -8,27 +8,26 @@ use crate::cas::CAS;
 /// retrieved from storage lazily (as necessary).  Reading occurs when values are requested, and
 /// storage occurs when a hash is generated.
 #[derive(Debug)]
-pub struct FileSystem<'a, ST: 'a + CAS> {
-    pub storage: &'a ST,
+pub struct FileSystem {
+    pub storage: Box<dyn CAS>,
 }
 
-impl<'a, ST> FileSystem<'a, ST>
-where
-    ST: 'a + CAS,
-{
-    pub fn new(storage: &'a ST) -> FileSystem<'a, ST> {
-        FileSystem { storage: storage }
+impl FileSystem {
+    pub fn new(storage: dyn CAS) -> FileSystem {
+        FileSystem {
+            storage: storage.into(),
+        }
     }
 
     /// Get the root commit -- a well-known commit with no parents and an empty tree.
-    pub fn root_commit(&self) -> Commit<ST> {
+    pub fn root_commit(&self) -> Commit {
         Commit::root(self)
     }
 
     /// Get a commit given its hash.
     ///
     /// Note that this does not actually load the commit; that occurs lazily, later.
-    pub fn get_commit(&self, hash: &Hash) -> Commit<ST> {
+    pub fn get_commit(&self, hash: &Hash) -> Commit {
         // this function takes a reference to the hash because it may someday cache recently used
         // commits, at which point the hash would not be consumed.
         Commit::for_hash(self, hash)

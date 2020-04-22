@@ -10,20 +10,20 @@ use std::rc::Rc;
 
 /// A Commit represents the state of the filesystem, and links to previous (parent) commits.
 #[derive(Debug)]
-pub struct Commit<'f, ST: 'f + CAS> {
+pub struct Commit<'a> {
     /// The filesystem within which this commit exists
-    fs: &'f FileSystem<'f, ST>,
+    fs: &'a FileSystem,
 
     /// The lazily loaded data about this commit.
-    inner: Rc<LazyHashedObject<'f, ST, CommitContent<'f, ST>>>,
+    inner: Rc<LazyHashedObject<CommitContent<'a>>>,
 }
 
 /// The lazily-loaded content of a Commit.
 #[derive(Debug)]
-struct CommitContent<'f, ST: 'f + CAS> {
+struct CommitContent<'a> {
     /// Parent commits
-    parents: Vec<Commit<'f, ST>>,
-    tree: Tree<'f, ST>,
+    parents: Vec<Commit<'a>>,
+    tree: Tree<'a>,
 }
 
 /// A raw commit, as stored in the content-addressible storage.
@@ -33,12 +33,9 @@ struct RawCommit {
     tree: Hash,
 }
 
-impl<'f, ST> Commit<'f, ST>
-where
-    ST: 'f + CAS,
-{
+impl<'a> Commit<'a> {
     /// Return a refcounted root commit
-    pub fn root(fs: &'f FileSystem<'f, ST>) -> Commit<'f, ST> {
+    pub fn root(fs: &FileSystem) -> Commit {
         let content = CommitContent {
             parents: vec![],
             tree: Tree::empty(fs),
@@ -50,7 +47,7 @@ where
     }
 
     /// Return a refcounted commit for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Commit<'f, ST> {
+    pub fn for_hash(fs: &FileSystem, hash: &Hash) -> Commit<'a> {
         Commit {
             fs: fs,
             inner: Rc::new(LazyHashedObject::for_hash(hash)),
@@ -58,7 +55,7 @@ where
     }
 
     /// Make a new commit that is a child of this one, with the given tree
-    pub fn make_child(self: Commit<'f, ST>, tree: Tree<'f, ST>) -> Fallible<Commit<'f, ST>> {
+    pub fn make_child(self, tree: Tree) -> Fallible<Commit<'a>> {
         let fs = self.fs;
         let content = CommitContent {
             parents: vec![self],
@@ -76,19 +73,19 @@ where
     }
 
     /// Get the parents of this commit
-    pub fn parents(&self) -> Fallible<&[Commit<'f, ST>]> {
+    pub fn parents(&self) -> Fallible<&[Commit]> {
         let content = self.inner.content(self.fs)?;
         Ok(&content.parents[..])
     }
 
     /// Get the Tree associated with this commit
-    pub fn tree(&self) -> Fallible<Tree<'f, ST>> {
+    pub fn tree(&self) -> Fallible<Tree> {
         let content = self.inner.content(self.fs)?;
         Ok(content.tree.clone())
     }
 }
 
-impl<'f, ST: 'f + CAS> Clone for Commit<'f, ST> {
+impl<'a> Clone for Commit<'a> {
     fn clone(&self) -> Self {
         Commit {
             fs: self.fs,
@@ -97,14 +94,11 @@ impl<'f, ST: 'f + CAS> Clone for Commit<'f, ST> {
     }
 }
 
-impl<'f, ST> LazyContent<'f, ST> for CommitContent<'f, ST>
-where
-    ST: 'f + CAS,
-{
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<CommitContent<'f, ST>> {
+impl<'a> LazyContent for CommitContent<'a> {
+    fn retrieve_from(fs: &FileSystem, hash: &Hash) -> Fallible<CommitContent<'a>> {
         let raw: RawCommit = fs.storage.retrieve(hash)?;
 
-        let mut parents: Vec<Commit<'f, ST>> = vec![];
+        let mut parents: Vec<Commit> = vec![];
         for h in raw.parents.iter() {
             parents.push(Commit::for_hash(fs, h));
         }
@@ -115,7 +109,7 @@ where
         })
     }
 
-    fn store_in(&self, fs: &FileSystem<'f, ST>) -> Fallible<Hash> {
+    fn store_in(&self, fs: &FileSystem) -> Fallible<Hash> {
         let mut parent_hashes: Vec<Hash> = vec![];
         parent_hashes.reserve(self.parents.len());
         for p in self.parents.iter() {

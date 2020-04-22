@@ -11,22 +11,19 @@ use std::result::Result as StdResult;
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
 /// `foo/bar/bing`).
-pub struct Tree<'f, ST: 'f + CAS>
-where
-    ST: 'f + CAS,
-{
+pub struct Tree<'a> {
     /// The filesystem within which this Tree exists
-    fs: &'f FileSystem<'f, ST>,
+    fs: &'a FileSystem,
 
     /// The lazily loaded data about this commit.
-    inner: Rc<LazyHashedObject<'f, ST, TreeContent<'f, ST>>>,
+    inner: Rc<LazyHashedObject<TreeContent<'a>>>,
 }
 
 /// The lazily-loaded content of a tree
 #[derive(Debug)]
-struct TreeContent<'f, ST: 'f + CAS> {
+struct TreeContent<'a> {
     data: Option<String>,
-    children: HashMap<String, Tree<'f, ST>>,
+    children: HashMap<String, Tree<'a>>,
 }
 
 /// A raw tree, as stored in the content-addressible storage.
@@ -36,9 +33,9 @@ struct RawTree {
     children: Vec<(String, Hash)>,
 }
 
-impl<'f, ST: 'f + CAS> Tree<'f, ST> {
+impl<'a> Tree<'a> {
     /// Return a Tree for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Tree<'f, ST> {
+    pub fn for_hash(fs: &FileSystem, hash: &Hash) -> Tree<'a> {
         Tree {
             fs: fs,
             inner: Rc::new(LazyHashedObject::for_hash(hash)),
@@ -46,7 +43,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     }
 
     /// return a Tree for the given TreeContent
-    fn for_content(fs: &'f FileSystem<ST>, content: TreeContent<'f, ST>) -> Tree<'f, ST> {
+    fn for_content(fs: &FileSystem, content: TreeContent) -> Tree<'a> {
         Tree {
             fs: fs,
             inner: Rc::new(LazyHashedObject::for_content(content)),
@@ -54,7 +51,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     }
 
     /// Create a new, empty tree
-    pub fn empty(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
+    pub fn empty(fs: &FileSystem) -> Tree {
         Tree::for_content(
             fs,
             TreeContent {
@@ -70,7 +67,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     }
 
     /// Get the children of this tree.
-    pub fn children(&self) -> Fallible<&HashMap<String, Tree<'f, ST>>> {
+    pub fn children(&self) -> Fallible<&HashMap<String, Tree>> {
         let content = self.inner.content(self.fs)?;
         Ok(&content.children)
     }
@@ -94,7 +91,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write(&self, path: &[&str], data: String) -> Fallible<Tree<'f, ST>> {
+    pub fn write(&self, path: &[&str], data: String) -> Fallible<Tree> {
         self.modify(path, Some(data))
     }
 
@@ -106,7 +103,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, path: &[&str]) -> Fallible<Tree<'f, ST>> {
+    pub fn remove(self, path: &[&str]) -> Fallible<Tree<'a>> {
         self.modify(path, None)
     }
 
@@ -124,7 +121,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
 
     /// Set the data at the given path, returning a new Tree that shares some nodes with the
     /// original via path copying.
-    fn modify(&self, path: &[&str], data: Option<String>) -> Fallible<Tree<'f, ST>> {
+    fn modify(&self, path: &[&str], data: Option<String>) -> Fallible<Tree> {
         if path.len() > 0 {
             let elt = path[0];
             let mut newchildren = self.children()?.clone();
@@ -176,7 +173,7 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     }
 }
 
-impl<'f, ST: 'f + CAS> Clone for Tree<'f, ST> {
+impl<'a> Clone for Tree<'a> {
     fn clone(&self) -> Self {
         Tree {
             fs: self.fs,
@@ -185,7 +182,7 @@ impl<'f, ST: 'f + CAS> Clone for Tree<'f, ST> {
     }
 }
 
-impl<'f, ST: 'f + CAS> Debug for Tree<'f, ST> {
+impl<'a> Debug for Tree<'a> {
     fn fmt(&self, f: &mut Formatter) -> StdResult<(), FmtError> {
         write!(f, "Tree")?;
         if self.inner.has_hash() {
@@ -205,13 +202,10 @@ impl<'f, ST: 'f + CAS> Debug for Tree<'f, ST> {
     }
 }
 
-impl<'f, ST> LazyContent<'f, ST> for TreeContent<'f, ST>
-where
-    ST: 'f + CAS,
-{
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<Self> {
+impl<'a> LazyContent for TreeContent<'a> {
+    fn retrieve_from(fs: &FileSystem, hash: &Hash) -> Fallible<Self> {
         let raw: RawTree = fs.storage.retrieve(hash)?;
-        let mut children: HashMap<String, Tree<'f, ST>> = HashMap::new();
+        let mut children: HashMap<String, Tree> = HashMap::new();
         for elt in raw.children.iter() {
             children.insert(elt.0.clone(), Tree::for_hash(fs, &elt.1));
         }
@@ -221,7 +215,7 @@ where
         })
     }
 
-    fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<Hash> {
+    fn store_in(&self, fs: &FileSystem) -> Fallible<Hash> {
         let mut children: Vec<(String, Hash)> = vec![];
         children.reserve(self.children.len());
         for (k, v) in self.children.iter() {
@@ -268,7 +262,7 @@ mod test {
         assert!(cmt.data().is_err());
     }
 
-    fn make_test_tree<'f, ST: 'f + CAS>(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
+    fn make_test_tree(fs: &FileSystem) -> Tree {
         Tree::empty(fs)
             .write(&["sub", "one"], "1".to_string())
             .unwrap()
