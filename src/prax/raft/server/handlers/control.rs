@@ -1,9 +1,9 @@
+use super::utils::*;
+use crate::prax::raft::diststate::DistributedState;
+use crate::prax::raft::log::LogEntry;
 use crate::prax::raft::server::inner::Actions;
 use crate::prax::raft::server::log::LogItem;
 use crate::prax::raft::server::state::{Mode, RaftState};
-use crate::prax::raft::diststate::DistributedState;
-use crate::prax::raft::log::LogEntry;
-use super::utils::*;
 
 #[cfg(test)]
 use crate::prax::raft::server::control::Control;
@@ -35,8 +35,10 @@ pub(in crate::prax::raft::server) fn handle_control_add<DS>(
 }
 
 #[cfg(test)]
-pub(in crate::prax::raft::server) fn handle_control_get_state<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>)
-where
+pub(in crate::prax::raft::server) fn handle_control_get_state<DS>(
+    state: &mut RaftState<DS>,
+    actions: &mut Actions<DS>,
+) where
     DS: DistributedState,
 {
     actions.send_control(Control::SetState(state.clone()));

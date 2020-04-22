@@ -36,17 +36,17 @@
 //! }
 //! ```
 
-mod hash;
 mod content;
+mod gc;
+mod hash;
+mod local;
 mod storage;
 mod traits;
-mod gc;
-mod local;
 
+pub use self::gc::GarbageCycle;
 pub use self::hash::Hash;
 pub use self::storage::Storage;
 pub use self::traits::CAS;
-pub use self::gc::GarbageCycle;
 
 mod error;
 pub use self::error::*;

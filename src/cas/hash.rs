@@ -1,7 +1,7 @@
-use std::fmt;
-use rustc_serialize::hex::{FromHex, ToHex};
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
+use rustc_serialize::hex::{FromHex, ToHex};
+use std::fmt;
 
 /// Type Hash represents the key under which content is stored.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, RustcDecodable, RustcEncodable)]

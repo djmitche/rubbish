@@ -1,7 +1,7 @@
 use super::error::*;
 use crate::cas::{Hash, CAS};
 use crate::fs::{FileSystem, FS};
-use crate::prax::{Prax, DistributedState};
+use crate::prax::{DistributedState, Prax};
 
 /// The current state of the rubbish cluster, represented by the hash of the latest commit
 /// in the FS.

@@ -1,8 +1,8 @@
-use crate::prax::raft::server::inner::{Actions};
-use crate::prax::raft::server::log::LogItem;
-use crate::prax::raft::server::state::{Mode, RaftState};
 use crate::prax::raft::diststate::{self, DistributedState};
 use crate::prax::raft::log::{LogEntry, RaftLog};
+use crate::prax::raft::server::inner::Actions;
+use crate::prax::raft::server::log::LogItem;
+use crate::prax::raft::server::state::{Mode, RaftState};
 use crate::prax::raft::Term;
 use serde_json;
 
@@ -85,4 +85,3 @@ pub(super) fn logentries(tuples: Vec<(Term, &str)>) -> Vec<LogEntry<LogItem<Requ
     }
     entries
 }
-

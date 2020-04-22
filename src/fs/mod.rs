@@ -32,14 +32,14 @@
 //! assert_eq!(tree.read(&["b"]).unwrap(), Some("Banana"));
 //! ```
 
+mod commit;
 mod fs;
 mod lazy;
-mod commit;
 mod tree;
 
 mod error;
 pub use self::error::*;
 
-pub use self::fs::FileSystem;
 pub use self::commit::Commit;
+pub use self::fs::FileSystem;
 pub use self::tree::Tree;

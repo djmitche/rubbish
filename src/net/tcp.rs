@@ -1,8 +1,8 @@
-use log::debug;
-use crate::net::{Message, NodeId, NetworkNode};
+use crate::net::{Message, NetworkNode, NodeId};
 use async_trait::async_trait;
 use byteorder::{ByteOrder, NetworkEndian};
 use failure::Fallible;
+use log::debug;
 use net2::TcpBuilder;
 use nix::sys::socket::sockopt::ReusePort;
 use std::net::SocketAddr;

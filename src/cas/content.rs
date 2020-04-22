@@ -1,8 +1,8 @@
 use super::hash::Hash;
+use bincode::rustc_serialize::{decode, encode};
+use bincode::SizeLimit;
 use failure::Fallible;
 use rustc_serialize::{Decodable, Encodable};
-use bincode::SizeLimit;
-use bincode::rustc_serialize::{encode, decode};
 
 /// Type Content represents the encoded version of the caller's data.
 #[derive(Debug, PartialEq)]

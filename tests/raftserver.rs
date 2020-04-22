@@ -1,4 +1,4 @@
-use failure::Fallible;
+use failure::{Fallible};
 use rubbish::prax::raft::diststate::{self, DistributedState};
 use rubbish::net::tcp::{TcpConfig, TcpNode};
 use rubbish::net::NodeId;

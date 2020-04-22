@@ -1,8 +1,8 @@
+use crate::net::NodeId;
+use crate::prax::raft::diststate::DistributedState;
 use crate::prax::raft::server::inner::Actions;
 use crate::prax::raft::server::message::*;
 use crate::prax::raft::server::state::{Mode, RaftState};
-use crate::prax::raft::diststate::DistributedState;
-use crate::net::NodeId;
 use crate::prax::raft::{Index, Term};
 
 /// Calculate prev_log_index and prev_log_term based on the given next_index.  This handles
@@ -31,8 +31,11 @@ where
 
 /// Update the current term based on the term in a message, and if not already
 /// a follower, change to that mode.  Returns true if mode was changed.
-pub(super) fn update_current_term<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>, term: Term)
-where
+pub(super) fn update_current_term<DS>(
+    state: &mut RaftState<DS>,
+    actions: &mut Actions<DS>,
+    term: Term,
+) where
     DS: DistributedState,
 {
     if term > state.current_term {
@@ -46,8 +49,11 @@ where
 
 /// Send an AppendEntriesReq to the given peer, based on our stored next_index information,
 /// and reset the heartbeat timer for that peer.
-pub(super) fn send_append_entries<DS>(state: &mut RaftState<DS>, actions: &mut Actions<DS>, peer: NodeId)
-where
+pub(super) fn send_append_entries<DS>(
+    state: &mut RaftState<DS>,
+    actions: &mut Actions<DS>,
+    peer: NodeId,
+) where
     DS: DistributedState,
 {
     assert_eq!(state.mode, Mode::Leader);

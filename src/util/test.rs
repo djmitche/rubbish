@@ -1,5 +1,5 @@
-use std::sync::Once;
 use env_logger;
+use std::sync::Once;
 
 static LOGGER_INITIALIZED: Once = Once::new();
 

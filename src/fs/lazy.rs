@@ -1,7 +1,7 @@
-use failure::Fallible;
 use super::fs::FileSystem;
 use crate::cas::Hash;
 use crate::cas::CAS;
+use failure::Fallible;
 use std::cell::RefCell;
 use std::marker::PhantomData;
 
@@ -12,7 +12,9 @@ use std::marker::PhantomData;
 /// only when requested; or it can be created with content, in which case the hash is only
 /// determined when requested (with the object stored in the FileSystem at that time).
 #[derive(Debug)]
-pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(RefCell<LazyInner<'f, ST, T>>);
+pub struct LazyHashedObject<'f, ST: 'f + CAS, T: LazyContent<'f, ST>>(
+    RefCell<LazyInner<'f, ST, T>>,
+);
 
 /// LazyInner proivdes interior mutability for LazyHashedObject.
 ///
@@ -188,9 +190,9 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::cas::Hash;
     use crate::cas::{LocalStorage, CAS};
     use crate::fs::FileSystem;
-    use crate::cas::Hash;
 
     #[derive(Debug, RustcDecodable, RustcEncodable)]
     struct TestContent(String);
@@ -209,7 +211,8 @@ mod test {
         }
     }
 
-    const HELLO_WORLD_HASH: &'static str = "6142e96d0071656be3de08f89fc7ab9d374f74428ce61bd8c693efeac4d831aa";
+    const HELLO_WORLD_HASH: &'static str =
+        "6142e96d0071656be3de08f89fc7ab9d374f74428ce61bd8c693efeac4d831aa";
 
     #[test]
     fn test_store() {

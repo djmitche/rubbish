@@ -1,6 +1,5 @@
-use failure::Fail;
 use crate::cas;
+use failure::Fail;
 
 #[derive(Debug, Fail)]
-pub enum Error {
-}
+pub enum Error {}

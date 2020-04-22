@@ -1,12 +1,12 @@
-use failure::Fallible;
-use super::lazy::{LazyHashedObject, LazyContent};
 use super::fs::FileSystem;
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter, Error as FmtError};
-use std::result::Result as StdResult;
+use super::lazy::{LazyContent, LazyHashedObject};
 use crate::cas::Hash;
 use crate::cas::CAS;
+use failure::Fallible;
+use std::collections::HashMap;
+use std::fmt::{Debug, Error as FmtError, Formatter};
 use std::rc::Rc;
+use std::result::Result as StdResult;
 
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
@@ -35,7 +35,6 @@ struct RawTree {
     data: Option<String>,
     children: Vec<(String, Hash)>,
 }
-
 
 impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// Return a Tree for the given hash
@@ -156,12 +155,10 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
         } else {
             let changed = match self.data()? {
                 None => !data.is_none(),
-                Some(ref oldvalue) => {
-                    match data {
-                        None => true,
-                        Some(ref newvalue) => oldvalue != newvalue,
-                    }
-                }
+                Some(ref oldvalue) => match data {
+                    None => true,
+                    Some(ref newvalue) => oldvalue != newvalue,
+                },
             };
 
             if changed {
@@ -242,12 +239,13 @@ where
 #[cfg(test)]
 mod test {
     use super::FileSystem;
-    use crate::cas::CAS;
     use super::*;
-    use crate::cas::LocalStorage;
     use crate::cas::Hash;
+    use crate::cas::LocalStorage;
+    use crate::cas::CAS;
 
-    const EMPTY_HASH: &'static str = "3e7077fd2f66d689e0cee6a7cf5b37bf2dca7c979af356d0a31cbc5c85605c7d";
+    const EMPTY_HASH: &'static str =
+        "3e7077fd2f66d689e0cee6a7cf5b37bf2dca7c979af356d0a31cbc5c85605c7d";
 
     #[test]
     fn test_empty() {
@@ -372,9 +370,7 @@ mod test {
         assert_eq!(tree.read(&["foo", "bar"]).unwrap(), Some("def"));
         assert_eq!(
             tree.hash().unwrap(),
-            &Hash::from_hex(
-                "09b0b66433fe7cd79470acbe3e4d490c33bcc8396607201f0d288e328e81e1be",
-            )
+            &Hash::from_hex("09b0b66433fe7cd79470acbe3e4d490c33bcc8396607201f0d288e328e81e1be",)
         );
     }
 

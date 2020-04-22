@@ -1,11 +1,11 @@
-use log::debug;
-use failure::{bail, err_msg, Fallible};
+use super::content::Content;
 use super::hash::Hash;
 use super::traits::CAS;
-use super::content::Content;
+use failure::{bail, err_msg, Fallible};
+use log::debug;
+use rustc_serialize::{Decodable, Encodable};
 use std::collections::HashMap;
 use std::sync::RwLock;
-use rustc_serialize::{Decodable, Encodable};
 
 /// Type LocalStorage provides a non-distributed content-addressible storage pool, suitable for
 /// local testing.  The content inserted into the mechanism can be of any type implementing the
@@ -118,9 +118,9 @@ mod tests {
     use super::LocalStorage;
     use crate::cas::hash::Hash;
     use crate::cas::traits::CAS;
-    use std::thread;
-    use std::sync::Arc;
     use crate::util::test::init_env_logger;
+    use std::sync::Arc;
+    use std::thread;
 
     #[test]
     fn put_get_strings() {

@@ -1,5 +1,5 @@
-use failure::Fallible;
 use super::hash::Hash;
+use failure::Fallible;
 use rustc_serialize::{Decodable, Encodable};
 
 /// Content Addressible Storage

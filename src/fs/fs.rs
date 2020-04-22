@@ -38,12 +38,13 @@ where
 #[cfg(test)]
 mod test {
     use super::FileSystem;
+    use crate::cas::Hash;
+    use crate::cas::LocalStorage;
     use crate::fs::commit::Commit;
     use crate::fs::tree::Tree;
-    use crate::cas::LocalStorage;
-    use crate::cas::Hash;
 
-    const ROOT_HASH: &'static str = "86f8e00f8fdef1675b25f5a38abde52a7a9da0bf8506f137e32d6e3f37d88740";
+    const ROOT_HASH: &'static str =
+        "86f8e00f8fdef1675b25f5a38abde52a7a9da0bf8506f137e32d6e3f37d88740";
 
     #[test]
     fn test_root() {
