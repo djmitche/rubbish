@@ -8,34 +8,35 @@
 //! use failure::Fallible;
 //! use rubbish::fs::{FileSystem, Commit, Error};
 //! let storage = Storage::new();
-//! let fs = FileSystem::new(&storage);
+//! let fs = FileSystem::new(Box::new(storage));
 //!
-//! fn child<'f, ST: 'f + CAS>(parent: Commit<'f, ST>,
-//!                           path: &[&str],
-//!                           data: String)
-//!                           -> Fallible<Commit<'f, ST>> {
-//!     let child_tree = parent.tree()?.write(path, data)?;
-//!     let child = parent.make_child(child_tree)?;
+//! fn child(fs: &FileSystem, parent: Commit, path: &[&str], data: Vec<u8>) -> Fallible<Commit> {
+//!     let child_tree = parent.tree(fs)?.write(fs, path, data)?;
+//!     let child = parent.make_child(&fs, &child_tree)?;
 //!     Ok(child)
 //! }
 //!
 //! // make a series of commits, each with one change
-//! let cmt = fs.root_commit();
-//! let cmt = child(cmt, &["a"], "Apple".to_string()).unwrap();
-//! let cmt = child(cmt, &["b"], "Banana".to_string()).unwrap();
-//! let cmt = child(cmt, &["c"], "Cantaloupe".to_string()).unwrap();
-//! let hash = cmt.hash().unwrap();
+//! let cmt = Commit::root(&fs).unwrap();
+//! let cmt = child(&fs, cmt, &["a"], vec![1]).unwrap();
+//! let cmt = child(&fs, cmt, &["b"], vec![2, 2]).unwrap();
+//! let cmt = child(&fs, cmt, &["c"], vec![3, 3, 3]).unwrap();
+//! let hash = cmt.hash(&fs).unwrap();
 //!
 //! // reload that based on its hash and verify the contents
-//! let cmt = fs.get_commit(hash);
-//! let tree = cmt.tree().unwrap();
-//! assert_eq!(tree.read(&["b"]).unwrap(), Some("Banana"));
+//! let cmt = Commit::for_hash(hash);
+//! let tree = cmt.tree(&fs).unwrap();
+//! assert_eq!(tree.read(&fs, &["b"]).unwrap(), Some(vec![2, 2]));
 //! ```
 
 mod commit;
+mod content;
 mod fs;
 mod lazy;
 mod tree;
+
+#[cfg(test)]
+mod hashes;
 
 mod error;
 pub use self::error::*;

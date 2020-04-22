@@ -1,7 +1,7 @@
+use super::content::Content;
 use super::fs::FileSystem;
-use super::lazy::{LazyContent, LazyHashedObject};
+use super::lazy::LazyHashedObject;
 use crate::cas::Hash;
-use crate::cas::CAS;
 use failure::Fallible;
 use std::collections::HashMap;
 use std::fmt::{Debug, Error as FmtError, Formatter};
@@ -11,77 +11,63 @@ use std::result::Result as StdResult;
 /// A Tree represents an image of a tree-shaped data structure, sort of like a filesystem directoy.
 /// However, directories can have associated data (that is, there can be data at `foo/bar` and at
 /// `foo/bar/bing`).
-pub struct Tree<'f, ST: 'f + CAS>
-where
-    ST: 'f + CAS,
-{
-    /// The filesystem within which this Tree exists
-    fs: &'f FileSystem<'f, ST>,
-
+#[derive(Clone)]
+pub struct Tree {
     /// The lazily loaded data about this commit.
-    inner: Rc<LazyHashedObject<'f, ST, TreeContent<'f, ST>>>,
+    inner: Rc<LazyHashedObject<Content>>,
 }
 
-/// The lazily-loaded content of a tree
-#[derive(Debug)]
-struct TreeContent<'f, ST: 'f + CAS> {
-    data: Option<String>,
-    children: HashMap<String, Tree<'f, ST>>,
-}
+impl Tree {
+    /// Create a new, empty tree
+    pub fn empty() -> Tree {
+        Tree::for_content(Content::Tree {
+            data: None,
+            children: HashMap::new(),
+        })
+    }
 
-/// A raw tree, as stored in the content-addressible storage.
-#[derive(Debug, RustcDecodable, RustcEncodable)]
-struct RawTree {
-    data: Option<String>,
-    children: Vec<(String, Hash)>,
-}
-
-impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// Return a Tree for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Tree<'f, ST> {
+    pub fn for_hash(hash: &Hash) -> Tree {
         Tree {
-            fs: fs,
             inner: Rc::new(LazyHashedObject::for_hash(hash)),
         }
     }
 
     /// return a Tree for the given TreeContent
-    fn for_content(fs: &'f FileSystem<ST>, content: TreeContent<'f, ST>) -> Tree<'f, ST> {
+    fn for_content(content: Content) -> Tree {
         Tree {
-            fs: fs,
             inner: Rc::new(LazyHashedObject::for_content(content)),
         }
     }
 
-    /// Create a new, empty tree
-    pub fn empty(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
-        Tree::for_content(
-            fs,
-            TreeContent {
-                data: None,
-                children: HashMap::new(),
-            },
-        )
-    }
-
     /// Get the hash for this tree
-    pub fn hash(&self) -> Fallible<&Hash> {
-        self.inner.hash(self.fs)
+    pub fn hash(&self, fs: &FileSystem) -> Fallible<&Hash> {
+        self.inner.hash(fs)
     }
 
     /// Get the children of this tree.
-    pub fn children(&self) -> Fallible<&HashMap<String, Tree<'f, ST>>> {
-        let content = self.inner.content(self.fs)?;
-        Ok(&content.children)
+    pub fn children(&self, fs: &FileSystem) -> Fallible<HashMap<String, Tree>> {
+        let content = self.inner.content(fs)?;
+        if let Content::Tree { data: _, children } = content {
+            Ok(children
+                .iter()
+                .map(|(n, h)| (n.clone(), Tree::for_hash(h)))
+                .collect())
+        } else {
+            panic!("{:?} is not a tree", self.inner.hash(fs).unwrap());
+        }
     }
 
+    // TODO: child, iter_children
+
     /// Get the data at this tree.
-    pub fn data(&self) -> Fallible<Option<&str>> {
-        let content = self.inner.content(self.fs)?;
-        Ok(match content.data {
-            None => None,
-            Some(ref s) => Some(s),
-        })
+    pub fn data(&self, fs: &FileSystem) -> Fallible<Option<Vec<u8>>> {
+        let content = self.inner.content(fs)?;
+        if let Content::Tree { data, children: _ } = content {
+            Ok(data.clone())
+        } else {
+            panic!("{:?} is not a tree", self.inner.hash(fs).unwrap());
+        }
     }
 
     /// Return a tree containing new value at the designated path, replacing any
@@ -94,8 +80,8 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// Writing uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn write(&self, path: &[&str], data: String) -> Fallible<Tree<'f, ST>> {
-        self.modify(path, Some(data))
+    pub fn write(&self, fs: &FileSystem, path: &[&str], data: Vec<u8>) -> Fallible<Tree> {
+        self.modify(fs, path, Some(data))
     }
 
     /// Return a tree with the value at the given path removed.  Empty directories will
@@ -106,133 +92,90 @@ impl<'f, ST: 'f + CAS> Tree<'f, ST> {
     /// This operation uses path copying to copy a minimal amount of tree data such that the
     /// original tree is not modified and a new tree is returned, sharing data where
     /// possible.
-    pub fn remove(self, path: &[&str]) -> Fallible<Tree<'f, ST>> {
-        self.modify(path, None)
+    pub fn remove(self, fs: &FileSystem, path: &[&str]) -> Fallible<Tree> {
+        self.modify(fs, path, None)
     }
 
     /// Read the value at the given path in this tree, if it is set.
-    pub fn read(&self, path: &[&str]) -> Fallible<Option<&str>> {
+    pub fn read(&self, fs: &FileSystem, path: &[&str]) -> Fallible<Option<Vec<u8>>> {
         if path.len() > 0 {
-            match self.children()?.get(path[0]) {
+            match self.children(fs)?.get(path[0]) {
                 None => Ok(None),
-                Some(ref sub) => sub.read(&path[1..]),
+                Some(ref sub) => sub.read(fs, &path[1..]),
             }
         } else {
-            self.data()
+            Ok(self.data(fs)?)
         }
     }
 
     /// Set the data at the given path, returning a new Tree that shares some nodes with the
     /// original via path copying.
-    fn modify(&self, path: &[&str], data: Option<String>) -> Fallible<Tree<'f, ST>> {
-        if path.len() > 0 {
-            let elt = path[0];
-            let mut newchildren = self.children()?.clone();
-            let subtree = match newchildren.get(elt) {
-                // TODO: this could be a lot more efficient than creating an empty subtree and
-                // modifying it
-                None => Tree::empty(self.fs).modify(&path[1..], data)?,
-                Some(ref sub) => sub.modify(&path[1..], data)?,
-            };
+    fn modify(&self, fs: &FileSystem, path: &[&str], newdata: Option<Vec<u8>>) -> Fallible<Tree> {
+        let content = self.inner.content(fs)?;
+        if let Content::Tree { data, children } = content {
+            if path.len() > 0 {
+                let elt = path[0];
+                let mut newchildren = children.clone();
+                let subtree = match newchildren.get(elt) {
+                    // TODO: this could be a lot more efficient than creating an empty subtree and
+                    // modifying it
+                    None => Tree::empty().modify(fs, &path[1..], newdata)?,
+                    Some(h) => Tree::for_hash(h).modify(fs, &path[1..], newdata)?,
+                };
 
-            // only keep non-empty subtrees
-            if subtree.data()?.is_some() || subtree.children()?.len() > 0 {
-                newchildren.insert(elt.to_string(), subtree);
+                // only keep non-empty subtrees
+                if subtree.data(fs)?.is_some() || subtree.children(fs)?.len() > 0 {
+                    newchildren.insert(elt.to_string(), subtree.hash(fs)?.clone());
+                } else {
+                    if newchildren.get(elt).is_some() {
+                        newchildren.remove(elt);
+                    }
+                }
+
+                let content = Content::Tree {
+                    data: self.data(fs)?,
+                    children: newchildren,
+                };
+                return Ok(Tree::for_content(content));
             } else {
-                if newchildren.get(elt).is_some() {
-                    newchildren.remove(elt);
+                if data.as_deref() != newdata.as_deref() {
+                    // create a new tree containing this data
+                    let content = Content::Tree {
+                        data: newdata,
+                        children: children.clone(),
+                    };
+                    return Ok(Tree::for_content(content));
+                } else {
+                    // no change -> no need to do anything
+                    return Ok(self.clone());
                 }
             }
-
-            let content = TreeContent {
-                data: match self.data()? {
-                    None => None,
-                    Some(s) => Some(s.to_string()),
-                },
-                children: newchildren,
-            };
-            return Ok(Tree::for_content(self.fs, content));
         } else {
-            let changed = match self.data()? {
-                None => !data.is_none(),
-                Some(ref oldvalue) => match data {
-                    None => true,
-                    Some(ref newvalue) => oldvalue != newvalue,
-                },
-            };
-
-            if changed {
-                // create a new tree containing this data
-                let content = TreeContent {
-                    data: data,
-                    children: self.children()?.clone(),
-                };
-                return Ok(Tree::for_content(self.fs, content));
-            } else {
-                // no change -> no need to do anything
-                return Ok(self.clone());
-            }
+            panic!("{:?} is not a tree", self.inner.hash(fs).unwrap());
         }
     }
 }
 
-impl<'f, ST: 'f + CAS> Clone for Tree<'f, ST> {
-    fn clone(&self) -> Self {
-        Tree {
-            fs: self.fs,
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<'f, ST: 'f + CAS> Debug for Tree<'f, ST> {
+impl Debug for Tree {
     fn fmt(&self, f: &mut Formatter) -> StdResult<(), FmtError> {
         write!(f, "Tree")?;
-        if self.inner.has_hash() {
-            write!(f, "@{:?}", self.hash().map_err(|_| FmtError)?)?;
+        if let Some(h) = self.inner.maybe_hash() {
+            write!(f, "@{:?}", h)?;
         }
-        if self.inner.has_content() {
-            write!(f, " [{:?}", self.data().map_err(|_| FmtError)?)?;
-            let children = self.children().map_err(|_| FmtError)?;
-            let mut names: Vec<&String> = children.keys().collect();
-            names.sort();
-            for name in names.drain(..) {
-                write!(f, ", {}: {:?}", name, children.get(name).unwrap())?;
+        if let Some(c) = self.inner.maybe_content() {
+            if let Content::Tree { data, children } = c {
+                write!(f, " [{:?}", data)?;
+                let mut names: Vec<&String> = children.keys().collect();
+                names.sort();
+                for name in names.drain(..) {
+                    write!(f, ", {}: {:?}", name, children.get(name).unwrap())?;
+                }
+                write!(f, "]")?;
+            } else {
+                write!(f, "(not a tree!)")?;
             }
-            write!(f, "]")?;
         }
         Ok(())
-    }
-}
-
-impl<'f, ST> LazyContent<'f, ST> for TreeContent<'f, ST>
-where
-    ST: 'f + CAS,
-{
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<Self> {
-        let raw: RawTree = fs.storage.retrieve(hash)?;
-        let mut children: HashMap<String, Tree<'f, ST>> = HashMap::new();
-        for elt in raw.children.iter() {
-            children.insert(elt.0.clone(), Tree::for_hash(fs, &elt.1));
-        }
-        Ok(TreeContent {
-            data: raw.data,
-            children: children,
-        })
-    }
-
-    fn store_in(&self, fs: &'f FileSystem<'f, ST>) -> Fallible<Hash> {
-        let mut children: Vec<(String, Hash)> = vec![];
-        children.reserve(self.children.len());
-        for (k, v) in self.children.iter() {
-            children.push((k.clone(), v.hash()?.clone()));
-        }
-        children.sort();
-        let raw = RawTree {
-            data: self.data.clone(),
-            children: children,
-        };
-        Ok(fs.storage.store(&raw)?)
     }
 }
 
@@ -242,163 +185,151 @@ mod test {
     use super::*;
     use crate::cas::Hash;
     use crate::cas::LocalStorage;
-    use crate::cas::CAS;
-
-    const EMPTY_HASH: &'static str =
-        "3e7077fd2f66d689e0cee6a7cf5b37bf2dca7c979af356d0a31cbc5c85605c7d";
+    use crate::fs::hashes::EMPTY_TREE_HASH;
 
     #[test]
     fn test_empty() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
-        let empty = Tree::empty(&fs);
-        assert_eq!(empty.hash().unwrap(), &Hash::from_hex(EMPTY_HASH));
-        assert_eq!(empty.children().unwrap().len(), 0);
-        assert!(empty.data().unwrap().is_none())
+        let fs = FileSystem::new(Box::new(storage));
+
+        let empty = Tree::empty();
+        assert_eq!(empty.hash(&fs).unwrap(), &Hash::from_hex(EMPTY_TREE_HASH));
+        assert_eq!(empty.children(&fs).unwrap().len(), 0);
+        assert!(empty.data(&fs).unwrap().is_none())
     }
 
     #[test]
     fn test_for_hash() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
-        let cmt = Tree::for_hash(&fs, &Hash::from_hex("012345"));
-        assert_eq!(cmt.hash().unwrap(), &Hash::from_hex("012345"));
+        let fs = FileSystem::new(Box::new(storage));
+
+        let tree = Tree::for_hash(&Hash::from_hex("012345"));
+        assert_eq!(tree.hash(&fs).unwrap(), &Hash::from_hex("012345"));
         // there's no such object with that hash, so getting children or data fails
-        assert!(cmt.children().is_err());
-        assert!(cmt.data().is_err());
+        assert!(tree.children(&fs).is_err());
+        assert!(tree.data(&fs).is_err());
     }
 
-    fn make_test_tree<'f, ST: 'f + CAS>(fs: &'f FileSystem<ST>) -> Tree<'f, ST> {
-        Tree::empty(fs)
-            .write(&["sub", "one"], "1".to_string())
+    fn make_test_tree(fs: &FileSystem) -> Tree {
+        Tree::empty()
+            .write(fs, &["sub", "one"], vec![1])
             .unwrap()
-            .write(&["sub", "two"], "2".to_string())
+            .write(fs, &["sub", "two"], vec![2])
             .unwrap()
-            .write(&["three"], "3".to_string())
+            .write(fs, &["three"], vec![3])
             .unwrap()
     }
 
     #[test]
-    fn test_write_and_incremental_load() {
+    fn test_write_and_read() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
+
+        let sub_hash =
+            Hash::from_hex("66e724410d6ddb17259a949475931a12790b5b0b5414f979074c6f5b9d0fa331");
+        let three_hash =
+            Hash::from_hex("d37516d409d79a5427f10f75b94e56f9bf8016d68938c6567e3a421c57559955");
+
         let tree = make_test_tree(&fs);
         assert_eq!(
             format!("{:?}", tree),
-            "Tree [None, \
-                        sub: Tree [None, \
-                            one: Tree [Some(\"1\")], \
-                            two: Tree [Some(\"2\")]], \
-                        three: Tree [Some(\"3\")]]"
+            format!("Tree [None, sub: {}, three: {}]", sub_hash, three_hash)
         );
 
-        let tree = Tree::for_hash(&fs, tree.hash().unwrap());
-        assert_eq!(
-            format!("{:?}", tree),
-            "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001"
-        );
+        let hash = tree.hash(&fs).unwrap();
+        let tree = Tree::for_hash(hash);
+        assert_eq!(format!("{:?}", tree), format!("Tree@{}", hash));
 
-        tree.read(&["sub"]).unwrap();
+        tree.read(&fs, &["sub"]).unwrap();
         assert_eq!(
             format!("{:?}", tree),
-            "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001 [None, \
-                        sub: Tree@e126739679be2e5f3eaa8d45a5737c15ead9ff0987af862176ec5b0cbb5fb92f [None, \
-                            one: Tree@ce9fff9bafb150d24fe2efa3aba6257548c9bd182173e51041cbff7948286c35, \
-                            two: Tree@0e9c430779ed1a97e66b6bbff2dc41caef63d63558182c451237085b806d841a], \
-                        three: Tree@4c5f9e63a341421c9382639826104e0133ea8604134b410574f5734bbddd9c3e]"
-        );
-
-        tree.read(&["sub", "two"]).unwrap();
-        assert_eq!(
-            format!("{:?}", tree),
-            "Tree@9b29101a4fae1ba244f7e8b0103f130114861718ed30d3b16d8b30d155592001 [None, \
-                        sub: Tree@e126739679be2e5f3eaa8d45a5737c15ead9ff0987af862176ec5b0cbb5fb92f [None, \
-                            one: Tree@ce9fff9bafb150d24fe2efa3aba6257548c9bd182173e51041cbff7948286c35, \
-                            two: Tree@0e9c430779ed1a97e66b6bbff2dc41caef63d63558182c451237085b806d841a [Some(\"2\")]], \
-                        three: Tree@4c5f9e63a341421c9382639826104e0133ea8604134b410574f5734bbddd9c3e]"
+            format!(
+                "Tree@{} [None, sub: {}, three: {}]",
+                hash, sub_hash, three_hash
+            )
         );
     }
 
     #[test]
     fn read_exists() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
 
         let tree = make_test_tree(&fs);
-        assert_eq!(tree.read(&["three"]).unwrap(), Some("3"));
+        assert_eq!(tree.read(&fs, &["three"]).unwrap(), Some(vec![3]));
     }
 
     #[test]
     fn read_exists_from_storage() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
 
         // create the tree and write it to storage by getting its hash
         let tree = make_test_tree(&fs);
-        let hash = tree.hash().unwrap();
+        let hash = tree.hash(&fs).unwrap();
 
         // then re-load it from the storage
-        let tree = Tree::for_hash(&fs, &hash);
-        assert_eq!(tree.read(&["sub", "two"]).unwrap(), Some("2"));
+        let tree = Tree::for_hash(&hash);
+        assert_eq!(tree.read(&fs, &["sub", "two"]).unwrap(), Some(vec![2]));
     }
 
     #[test]
     fn read_not_found() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
 
         let tree = make_test_tree(&fs);
-        assert_eq!(tree.read(&[]).unwrap(), None);
-        assert_eq!(tree.read(&["notathing"]).unwrap(), None);
-        assert_eq!(tree.read(&["sub", "sub2", "sub"]).unwrap(), None);
+        assert_eq!(tree.read(&fs, &[]).unwrap(), None);
+        assert_eq!(tree.read(&fs, &["notathing"]).unwrap(), None);
+        assert_eq!(tree.read(&fs, &["sub", "sub2", "sub"]).unwrap(), None);
         // "sub" exists but there's no data there
-        assert_eq!(tree.read(&["sub"]).unwrap(), None);
+        assert_eq!(tree.read(&fs, &["sub"]).unwrap(), None);
     }
 
     #[test]
     fn test_overwrite() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
 
-        let tree = Tree::empty(&fs);
-        let tree = tree.write(&["foo", "bar"], "abc".to_string()).unwrap();
+        let tree = Tree::empty();
+        let tree = tree.write(&fs, &["foo", "bar"], vec![1]).unwrap();
 
         // reload and write a new value
-        let tree = Tree::for_hash(&fs, tree.hash().unwrap());
-        let tree = tree.write(&["foo", "bar"], "def".to_string()).unwrap();
+        let tree = Tree::for_hash(tree.hash(&fs).unwrap());
+        let tree = tree.write(&fs, &["foo", "bar"], vec![2]).unwrap();
 
-        assert_eq!(tree.read(&["foo", "bar"]).unwrap(), Some("def"));
+        assert_eq!(tree.read(&fs, &["foo", "bar"]).unwrap(), Some(vec![2]));
         assert_eq!(
-            tree.hash().unwrap(),
-            &Hash::from_hex("09b0b66433fe7cd79470acbe3e4d490c33bcc8396607201f0d288e328e81e1be",)
+            tree.hash(&fs).unwrap(),
+            &Hash::from_hex("bf6d7abc6060919b29a08149d1fe4c2cb2d18f109b022c5ed0d18ac07ed48aca",)
         );
     }
 
     #[test]
     fn remove_leaf() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
 
         let tree = make_test_tree(&fs);
-        let tree = tree.remove(&["sub", "one"]).unwrap();
+        let tree = tree.remove(&fs, &["sub", "one"]).unwrap();
 
-        let tree = Tree::for_hash(&fs, tree.hash().unwrap());
+        let tree = Tree::for_hash(tree.hash(&fs).unwrap());
 
-        assert_eq!(tree.read(&["sub", "one"]).unwrap(), None);
+        assert_eq!(tree.read(&fs, &["sub", "one"]).unwrap(), None);
     }
 
     #[test]
     fn remove_deep_from_storage() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
 
-        let tree = Tree::empty(&fs)
-            .write(&["a", "b", "c", "d"], "value".to_string())
+        let tree = Tree::empty()
+            .write(&fs, &["a", "b", "c", "d"], vec![1, 2, 3])
             .unwrap();
-        let tree = Tree::for_hash(&fs, tree.hash().unwrap());
-        let tree = tree.remove(&["a", "b", "c", "d"]).unwrap();
+        let tree = Tree::for_hash(tree.hash(&fs).unwrap());
+        let tree = tree.remove(&fs, &["a", "b", "c", "d"]).unwrap();
 
         // should trim empty directories, so this should be empty
-        assert_eq!(tree.hash().unwrap(), &Hash::from_hex(EMPTY_HASH));
+        assert_eq!(tree.hash(&fs).unwrap(), &Hash::from_hex(EMPTY_TREE_HASH));
     }
 }

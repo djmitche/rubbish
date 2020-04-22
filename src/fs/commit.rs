@@ -1,132 +1,73 @@
+use super::content::Content;
 use super::fs::FileSystem;
-use super::lazy::{LazyContent, LazyHashedObject};
+use super::lazy::LazyHashedObject;
 use super::tree::Tree;
 use crate::cas::Hash;
-use crate::cas::CAS;
 use failure::Fallible;
 use std::rc::Rc;
 
 // TODO: use pub(crate)
 
 /// A Commit represents the state of the filesystem, and links to previous (parent) commits.
-#[derive(Debug)]
-pub struct Commit<'f, ST: 'f + CAS> {
-    /// The filesystem within which this commit exists
-    fs: &'f FileSystem<'f, ST>,
-
+#[derive(Debug, Clone)]
+pub struct Commit {
     /// The lazily loaded data about this commit.
-    inner: Rc<LazyHashedObject<'f, ST, CommitContent<'f, ST>>>,
+    inner: Rc<LazyHashedObject<Content>>,
 }
 
-/// The lazily-loaded content of a Commit.
-#[derive(Debug)]
-struct CommitContent<'f, ST: 'f + CAS> {
-    /// Parent commits
-    parents: Vec<Commit<'f, ST>>,
-    tree: Tree<'f, ST>,
-}
-
-/// A raw commit, as stored in the content-addressible storage.
-#[derive(Debug, RustcDecodable, RustcEncodable)]
-struct RawCommit {
-    parents: Vec<Hash>,
-    tree: Hash,
-}
-
-impl<'f, ST> Commit<'f, ST>
-where
-    ST: 'f + CAS,
-{
-    /// Return a refcounted root commit
-    pub fn root(fs: &'f FileSystem<'f, ST>) -> Commit<'f, ST> {
-        let content = CommitContent {
+impl Commit {
+    /// Return a root commit
+    pub fn root(fs: &FileSystem) -> Fallible<Commit> {
+        let content = Content::Commit {
             parents: vec![],
-            tree: Tree::empty(fs),
+            tree: Tree::empty().hash(fs)?.clone(),
         };
-        Commit {
-            fs: fs,
+        Ok(Commit {
             inner: Rc::new(LazyHashedObject::for_content(content)),
-        }
+        })
     }
 
-    /// Return a refcounted commit for the given hash
-    pub fn for_hash(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Commit<'f, ST> {
+    /// Return a commit for the given hash
+    pub fn for_hash(hash: &Hash) -> Commit {
         Commit {
-            fs: fs,
             inner: Rc::new(LazyHashedObject::for_hash(hash)),
         }
     }
 
     /// Make a new commit that is a child of this one, with the given tree
-    pub fn make_child(self: Commit<'f, ST>, tree: Tree<'f, ST>) -> Fallible<Commit<'f, ST>> {
-        let fs = self.fs;
-        let content = CommitContent {
-            parents: vec![self],
-            tree: tree,
+    pub fn make_child(&self, fs: &FileSystem, tree: &Tree) -> Fallible<Commit> {
+        let content = Content::Commit {
+            parents: vec![self.hash(fs)?.clone()],
+            tree: tree.hash(fs)?.clone(),
         };
         Ok(Commit {
-            fs: fs,
             inner: Rc::new(LazyHashedObject::for_content(content)),
         })
     }
 
     /// Get the hash for this commit
-    pub fn hash(&self) -> Fallible<&Hash> {
-        self.inner.hash(self.fs)
+    pub fn hash(&self, fs: &FileSystem) -> Fallible<&Hash> {
+        self.inner.hash(fs)
     }
 
     /// Get the parents of this commit
-    pub fn parents(&self) -> Fallible<&[Commit<'f, ST>]> {
-        let content = self.inner.content(self.fs)?;
-        Ok(&content.parents[..])
+    pub fn parents(&self, fs: &FileSystem) -> Fallible<Vec<Commit>> {
+        let content = self.inner.content(fs)?;
+        if let Content::Commit { parents, tree: _ } = content {
+            Ok(parents[..].iter().map(|h| Commit::for_hash(&h)).collect())
+        } else {
+            panic!("{:?} is not a commit", self.inner.hash(fs).unwrap());
+        }
     }
 
     /// Get the Tree associated with this commit
-    pub fn tree(&self) -> Fallible<Tree<'f, ST>> {
-        let content = self.inner.content(self.fs)?;
-        Ok(content.tree.clone())
-    }
-}
-
-impl<'f, ST: 'f + CAS> Clone for Commit<'f, ST> {
-    fn clone(&self) -> Self {
-        Commit {
-            fs: self.fs,
-            inner: self.inner.clone(),
+    pub fn tree(&self, fs: &FileSystem) -> Fallible<Tree> {
+        let content = self.inner.content(fs)?;
+        if let Content::Commit { parents: _, tree } = content {
+            Ok(Tree::for_hash(&tree))
+        } else {
+            panic!("{:?} is not a commit", self.inner.hash(fs).unwrap());
         }
-    }
-}
-
-impl<'f, ST> LazyContent<'f, ST> for CommitContent<'f, ST>
-where
-    ST: 'f + CAS,
-{
-    fn retrieve_from(fs: &'f FileSystem<'f, ST>, hash: &Hash) -> Fallible<CommitContent<'f, ST>> {
-        let raw: RawCommit = fs.storage.retrieve(hash)?;
-
-        let mut parents: Vec<Commit<'f, ST>> = vec![];
-        for h in raw.parents.iter() {
-            parents.push(Commit::for_hash(fs, h));
-        }
-
-        Ok(CommitContent {
-            parents: parents,
-            tree: Tree::for_hash(fs, &raw.tree),
-        })
-    }
-
-    fn store_in(&self, fs: &FileSystem<'f, ST>) -> Fallible<Hash> {
-        let mut parent_hashes: Vec<Hash> = vec![];
-        parent_hashes.reserve(self.parents.len());
-        for p in self.parents.iter() {
-            let phash = p.hash()?.clone();
-            parent_hashes.push(phash);
-        }
-        let raw = RawCommit {
-            parents: parent_hashes,
-            tree: self.tree.hash()?.clone(),
-        };
-        Ok(fs.storage.store(&raw)?)
     }
 }
 
@@ -135,27 +76,25 @@ mod test {
     use super::Commit;
     use crate::cas::Hash;
     use crate::cas::LocalStorage;
+    use crate::fs::hashes::{EMPTY_TREE_HASH, ROOT_HASH};
     use crate::fs::tree::Tree;
     use crate::fs::FileSystem;
-
-    const ROOT_HASH: &'static str =
-        "86f8e00f8fdef1675b25f5a38abde52a7a9da0bf8506f137e32d6e3f37d88740";
-    const EMPTY_TREE_HASH: &'static str =
-        "3e7077fd2f66d689e0cee6a7cf5b37bf2dca7c979af356d0a31cbc5c85605c7d";
 
     #[test]
     fn test_root() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
-        let root = Commit::root(&fs);
-        assert_eq!(root.hash().unwrap(), &Hash::from_hex(ROOT_HASH));
-        assert_eq!(root.parents().unwrap().len(), 0);
+        let fs = FileSystem::new(Box::new(storage));
+
+        let root = Commit::root(&fs).unwrap();
+        assert_eq!(root.hash(&fs).unwrap(), &Hash::from_hex(ROOT_HASH));
+        assert_eq!(root.parents(&fs).unwrap().len(), 0);
 
         // reload the root hash from storage
-        let root = Commit::for_hash(&fs, &Hash::from_hex(ROOT_HASH));
-        assert_eq!(root.parents().unwrap().len(), 0);
+        let root = Commit::for_hash(&Hash::from_hex(ROOT_HASH));
+        assert_eq!(root.parents(&fs).unwrap().len(), 0);
+
         assert_eq!(
-            root.tree().unwrap().hash().unwrap(),
+            root.tree(&fs).unwrap().hash(&fs).unwrap(),
             &Hash::from_hex(EMPTY_TREE_HASH)
         );
     }
@@ -163,36 +102,37 @@ mod test {
     #[test]
     fn test_for_hash() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
-        let cmt = Commit::for_hash(&fs, &Hash::from_hex("012345"));
-        assert_eq!(cmt.hash().unwrap(), &Hash::from_hex("012345"));
+        let fs = FileSystem::new(Box::new(storage));
+
+        let cmt = Commit::for_hash(&Hash::from_hex("012345"));
+        assert_eq!(cmt.hash(&fs).unwrap(), &Hash::from_hex("012345"));
         // there's no such object with that hash, so getting parents or tree fails
-        assert!(cmt.parents().is_err());
-        assert!(cmt.tree().is_err());
+        assert!(cmt.parents(&fs).is_err());
+        assert!(cmt.tree(&fs).is_err());
     }
 
     #[test]
     fn test_make_child() {
         let storage = LocalStorage::new();
-        let fs = FileSystem::new(&storage);
+        let fs = FileSystem::new(Box::new(storage));
 
-        let tree = Tree::empty(&fs)
-            .write(&["x", "1"], "one".to_string())
+        let tree = Tree::empty()
+            .write(&fs, &["x", "1"], vec![1])
             .unwrap()
-            .write(&["x", "2"], "three".to_string())
+            .write(&fs, &["x", "2"], vec![2, 2, 2])
             .unwrap();
-        let tree_hash = tree.hash().unwrap().clone();
+        let tree_hash = tree.hash(&fs).unwrap().clone();
 
-        let cmt = Commit::root(&fs);
-        let child = cmt.make_child(tree).unwrap();
+        let cmt = Commit::root(&fs).unwrap();
+        let child = cmt.make_child(&fs, &tree).unwrap();
 
         // hash it and re-retrieve it
-        let child_hash = child.hash().unwrap();
-        let child = Commit::for_hash(&fs, child_hash);
+        let child_hash = child.hash(&fs).unwrap();
+        let child = Commit::for_hash(child_hash);
 
-        let parents = child.parents().unwrap();
+        let parents = child.parents(&fs).unwrap();
         assert_eq!(parents.len(), 1);
-        assert_eq!(parents[0].hash().unwrap(), &Hash::from_hex(ROOT_HASH));
-        assert_eq!(child.tree().unwrap().hash().unwrap(), &tree_hash);
+        assert_eq!(parents[0].hash(&fs).unwrap(), &Hash::from_hex(ROOT_HASH));
+        assert_eq!(child.tree(&fs).unwrap().hash(&fs).unwrap(), &tree_hash);
     }
 }

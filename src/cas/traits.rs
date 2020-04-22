@@ -1,6 +1,7 @@
 use super::hash::Hash;
 use failure::Fallible;
-use rustc_serialize::{Decodable, Encodable};
+
+pub type Content = Vec<u8>;
 
 /// Content Addressible Storage
 ///
@@ -28,15 +29,15 @@ use rustc_serialize::{Decodable, Encodable};
 ///    file, and once the scan is complete any previous files can be discarded.
 ///
 /// Garbage collection runs can overlap, although this is not recommended.
-pub trait CAS {
+pub trait CAS: std::fmt::Debug {
     /// Store a value into the storage pool, returning its hash.
     ///
     /// Inserting the same value twice will result in the same Hash (and no additional use of
     /// space).
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Fallible<Hash>;
+    fn store(&self, value: Content) -> Fallible<Hash>;
 
     /// Retrieve a value by hash.
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Fallible<T>;
+    fn retrieve(&self, hash: &Hash) -> Fallible<Content>;
 
     /// Mark a value as part of the current garbage-collection generation.  This will fetch
     /// the value from another node if necessary and thus may fail.

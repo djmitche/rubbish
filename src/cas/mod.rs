@@ -27,19 +27,17 @@
 //!   let mut storage = rubbish::cas::Storage::new();
 //!
 //!   // store some things
-//!   let hash42 = storage.store(&42u32).unwrap();
-//!   let hash314 = storage.store(&"π".to_string()).unwrap();
+//!   let hash12 = storage.store(vec![1, 2]).unwrap();
+//!   let hash34 = storage.store(vec![3, 4]).unwrap();
 //!
 //!   // and retrieve them, by type
-//!   assert_eq!(storage.retrieve::<u32>(&hash42).unwrap(), 42u32);
-//!   assert_eq!(storage.retrieve::<String>(&hash314).unwrap(), "π".to_string());
+//!   assert_eq!(storage.retrieve(&hash12).unwrap(), vec![1, 2]);
+//!   assert_eq!(storage.retrieve(&hash34).unwrap(), vec![3, 4]);
 //! }
 //! ```
 
-mod content;
 mod gc;
 mod hash;
-mod local;
 mod storage;
 mod traits;
 
@@ -48,9 +46,7 @@ pub use self::hash::Hash;
 pub use self::storage::Storage;
 pub use self::traits::CAS;
 
+pub use self::storage::Storage as LocalStorage;
+
 mod error;
 pub use self::error::*;
-
-// LocalStorage is for test use only
-#[cfg(test)]
-pub use self::local::LocalStorage;

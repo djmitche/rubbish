@@ -1,21 +1,31 @@
-use super::content::Content;
 use super::hash::Hash;
-use super::traits::CAS;
+use super::traits::{Content, CAS};
 use failure::{bail, err_msg, Fallible};
 use log::debug;
-use rustc_serialize::{Decodable, Encodable};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::RwLock;
+
+// TODO: is the RwLock required?
 
 /// Type Storage provides a distributed content-addressible storage pool.  The content
 /// inserted into the mechanism can be of any type implementing the `rustc_serialize`
 /// traits `Decodable` and `Encodable`.
 pub struct Storage(RwLock<Inner>);
 
+#[derive(Debug)]
 pub(crate) struct Inner {
     map: HashMap<Hash, (u64, Content)>,
     garbage_generation: u64,
     cur_generation: u64,
+}
+
+impl fmt::Debug for Storage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Point")
+            .field("inner", &self.0.read())
+            .finish()
+    }
 }
 
 impl Storage {
@@ -30,26 +40,25 @@ impl Storage {
 }
 
 impl CAS for Storage {
-    fn store<T: Encodable + Decodable>(&self, value: &T) -> Fallible<Hash> {
+    fn store(&self, value: Content) -> Fallible<Hash> {
         let mut inner = self.0.write().map_err(|_| err_msg("Lock Poisoned"))?;
 
         let cur_generation = inner.cur_generation;
-        let content = Content::new(value)?;
-        let hash = content.hash();
+        let hash = Hash::for_bytes(&value);
         debug!("store content with hash {:?}", hash);
-        inner.map.insert(hash.clone(), (cur_generation, content));
+        inner.map.insert(hash.clone(), (cur_generation, value));
         // note that we assume no hash collisions of encoded values, since this is
         // not a security-sensitive context
         Ok(hash)
     }
 
-    fn retrieve<T: Encodable + Decodable>(&self, hash: &Hash) -> Fallible<T> {
+    fn retrieve(&self, hash: &Hash) -> Fallible<Content> {
         let inner = self.0.read().map_err(|_| err_msg("Lock Poisoned"))?;
 
         debug!("retrieve content with hash {:?}", hash);
         match inner.map.get(hash) {
             None => bail!("No object found"),
-            Some(tup) => Ok(tup.1.decode()?),
+            Some(tup) => Ok(tup.1.clone()),
         }
     }
 
@@ -96,87 +105,34 @@ impl CAS for Storage {
     }
 }
 
-/*
-
-// error-chain does not support generic errors in foreign_links, so these
-// implementations will reflect a PoisonError into a cas::Error.
-
-impl<'a> From<PoisonError<RwLockReadGuard<'a, Inner>>> for Error {
-    fn from(e: PoisonError<RwLockReadGuard<'a, Inner>>) -> Self {
-        ErrorKind::LockError(format!("{}", e)).into()
-    }
-}
-
-impl<'a> From<PoisonError<RwLockWriteGuard<'a, Inner>>> for Error {
-    fn from(e: PoisonError<RwLockWriteGuard<'a, Inner>>) -> Self {
-        ErrorKind::LockError(format!("{}", e)).into()
-    }
-}
-*/
-
 #[cfg(test)]
 mod tests {
     use super::Storage;
     use crate::cas::hash::Hash;
     use crate::cas::traits::CAS;
     use crate::util::test::init_env_logger;
-    use std::sync::Arc;
-    use std::thread;
 
     #[test]
-    fn put_get_strings() {
+    fn simple_put_get_strings() {
         init_env_logger();
 
         let storage = Storage::new();
 
-        let hash1 = storage.store(&"one".to_string()).unwrap();
-        let hash2 = storage.store(&"two".to_string()).unwrap();
+        let hash1 = storage.store(b"one".to_vec()).unwrap();
+        let hash2 = storage.store(b"two".to_vec()).unwrap();
         let badhash = Hash::from_hex("000000");
 
-        assert_eq!(
-            storage.retrieve::<String>(&hash1).unwrap(),
-            "one".to_string()
-        );
-        assert_eq!(
-            storage.retrieve::<String>(&hash2).unwrap(),
-            "two".to_string()
-        );
-        assert!(storage.retrieve::<String>(&badhash).is_err());
-    }
-
-    #[test]
-    fn test_parallel_access() {
-        let storage = Arc::new(Storage::new());
-
-        fn thd(storage: Arc<Storage>) {
-            let mut hashes = vec![];
-            for i in 0..100 {
-                hashes.push(storage.store::<usize>(&i).unwrap());
-            }
-            for i in 0..100 {
-                let hash = &hashes[i];
-                let val = storage.retrieve::<usize>(&hash).unwrap();
-                assert_eq!(val, i);
-            }
-        };
-
-        let mut threads = vec![];
-        for _ in 0..10 {
-            let storage = storage.clone();
-            threads.push(thread::spawn(move || thd(storage)));
-        }
-
-        for thd in threads {
-            thd.join().unwrap();
-        }
+        assert_eq!(storage.retrieve(&hash1).unwrap(), b"one".to_vec());
+        assert_eq!(storage.retrieve(&hash2).unwrap(), b"two".to_vec());
+        assert!(storage.retrieve(&badhash).is_err());
     }
 
     #[test]
     fn put_twice() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"xyz".to_string()).unwrap();
-        let hash2 = storage.store(&"xyz".to_string()).unwrap();
+        let hash1 = storage.store(b"xyz".to_vec()).unwrap();
+        let hash2 = storage.store(b"xyz".to_vec()).unwrap();
         assert_eq!(hash1, hash2);
     }
 
@@ -184,7 +140,7 @@ mod tests {
     fn touch() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"xyz".to_string()).unwrap();
+        let hash1 = storage.store(b"xyz".to_vec()).unwrap();
         storage.touch(&hash1).unwrap();
     }
 
@@ -199,21 +155,21 @@ mod tests {
     fn gc() {
         let storage = super::Storage::new();
 
-        let hash1 = storage.store(&"abc".to_string()).unwrap();
-        let hash2 = storage.store(&"def".to_string()).unwrap();
-        let hash3 = storage.store(&"ghi".to_string()).unwrap();
-        let hash4 = storage.store(&"jkl".to_string()).unwrap();
+        let hash1 = storage.store(b"abc".to_vec()).unwrap();
+        let hash2 = storage.store(b"def".to_vec()).unwrap();
+        let hash3 = storage.store(b"ghi".to_vec()).unwrap();
+        let hash4 = storage.store(b"jkl".to_vec()).unwrap();
 
         storage.begin_gc().unwrap();
         storage.touch(&hash1).unwrap();
-        storage.retrieve::<String>(&hash2).unwrap();
-        storage.store(&"ghi".to_string()).unwrap(); // hash3
+        storage.retrieve(&hash2).unwrap();
+        storage.store(b"ghi".to_vec()).unwrap(); // hash3
         storage.end_gc();
 
         // hash4 should be gone now
-        assert!(storage.retrieve::<String>(&hash1).is_ok()); // touched
-        assert!(storage.retrieve::<String>(&hash2).is_err()); // retrieved
-        assert!(storage.retrieve::<String>(&hash3).is_ok()); // stored
-        assert!(storage.retrieve::<String>(&hash4).is_err()); // not referenced
+        assert!(storage.retrieve(&hash1).is_ok()); // touched
+        assert!(storage.retrieve(&hash2).is_err()); // retrieved
+        assert!(storage.retrieve(&hash3).is_ok()); // stored
+        assert!(storage.retrieve(&hash4).is_err()); // not referenced
     }
 }
