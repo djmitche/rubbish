@@ -1,10 +1,15 @@
 # Next
 
+* Rewrite modify to not be recursive
 * Make everything async
+
+# FS
+
+* cache Rc<Lazy..> in the FS, retrieve them from there when loading by hash
 
 # CAS
 
-* Implement CAS with internal storage, refcounting
+* Implement an on-disk storage system.
 * Switch from rustc_serialize to serde
 
 # Raft
