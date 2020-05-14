@@ -45,29 +45,41 @@ impl Tree {
         self.inner.hash(fs)
     }
 
-    /// Get the children of this tree.
-    pub fn children(&self, fs: &FileSystem) -> Fallible<HashMap<String, Tree>> {
+    /// Utility function to get the content or panic trying
+    fn content(&self, fs: &FileSystem) -> Fallible<(&Option<Vec<u8>>, &HashMap<String, Hash>)> {
         let content = self.inner.content(fs)?;
-        if let Content::Tree { data: _, children } = content {
-            Ok(children
-                .iter()
-                .map(|(n, h)| (n.clone(), Tree::for_hash(h)))
-                .collect())
+        if let Content::Tree { data, children } = content {
+            Ok((data, children))
         } else {
             panic!("{:?} is not a tree", self.inner.hash(fs).unwrap());
         }
     }
 
-    // TODO: child, iter_children
+    /// Get the children of this tree.
+    pub fn children(&self, fs: &FileSystem) -> Fallible<HashMap<String, Tree>> {
+        let (_, children) = self.content(fs)?;
+        Ok(children
+            .iter()
+            .map(|(n, h)| (n.clone(), Tree::for_hash(h)))
+            .collect())
+    }
+
+    /// Get a child of this tree, if it exists
+    pub fn child(&self, fs: &FileSystem, name: &str) -> Fallible<Option<Tree>> {
+        let (_, children) = self.content(fs)?;
+        if let Some(h) = children.get(name) {
+            Ok(Some(Tree::for_hash(h)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // TODO: iter_children
 
     /// Get the data at this tree.
     pub fn data(&self, fs: &FileSystem) -> Fallible<Option<Vec<u8>>> {
-        let content = self.inner.content(fs)?;
-        if let Content::Tree { data, children: _ } = content {
-            Ok(data.clone())
-        } else {
-            panic!("{:?} is not a tree", self.inner.hash(fs).unwrap());
-        }
+        let (data, _) = self.content(fs)?;
+        Ok(data.clone())
     }
 
     /// Return a tree containing new value at the designated path, replacing any
@@ -111,47 +123,119 @@ impl Tree {
     /// Set the data at the given path, returning a new Tree that shares some nodes with the
     /// original via path copying.
     fn modify(&self, fs: &FileSystem, path: &[&str], newdata: Option<Vec<u8>>) -> Fallible<Tree> {
-        let content = self.inner.content(fs)?;
-        if let Content::Tree { data, children } = content {
-            if path.len() > 0 {
-                let elt = path[0];
-                let mut newchildren = children.clone();
-                let subtree = match newchildren.get(elt) {
-                    // TODO: this could be a lot more efficient than creating an empty subtree and
-                    // modifying it
-                    None => Tree::empty().modify(fs, &path[1..], newdata)?,
-                    Some(h) => Tree::for_hash(h).modify(fs, &path[1..], newdata)?,
-                };
-
-                // only keep non-empty subtrees
-                if subtree.data(fs)?.is_some() || subtree.children(fs)?.len() > 0 {
-                    newchildren.insert(elt.to_string(), subtree.hash(fs)?.clone());
+        // Begin by iterating along the path, generating a vec of Option<Tree> containing existing
+        // trees along that path, or None where no such tree exists.  Trees[i] is the tree at
+        // path[..i], so trees[0] is the root.
+        let mut trees = vec![Some(self.clone())];
+        for elt in path {
+            if let Some(ref t) = trees[trees.len() - 1] {
+                if let Some(c) = t.child(fs, elt)? {
+                    trees.push(Some(c));
                 } else {
-                    if newchildren.get(elt).is_some() {
-                        newchildren.remove(elt);
-                    }
+                    trees.push(None);
                 }
-
-                let content = Content::Tree {
-                    data: self.data(fs)?,
-                    children: newchildren,
-                };
-                return Ok(Tree::for_content(content));
             } else {
-                if data.as_deref() != newdata.as_deref() {
-                    // create a new tree containing this data
-                    let content = Content::Tree {
-                        data: newdata,
-                        children: children.clone(),
-                    };
-                    return Ok(Tree::for_content(content));
+                trees.push(None);
+            }
+        }
+
+        if let Some(newdata) = newdata {
+            // we are adding data, so write that data in subtree
+            let subtree = trees.pop().unwrap();
+            let mut subtree = if let Some(ref st) = subtree {
+                let (_, children) = st.content(fs)?;
+                Tree::for_content(Content::Tree {
+                    data: Some(newdata),
+                    children: children.clone(),
+                })
+            } else {
+                Tree::for_content(Content::Tree {
+                    data: Some(newdata),
+                    children: HashMap::new(),
+                })
+            };
+
+            // then work backward, updating trees along the way
+            for (elt, mut tree) in path.iter().zip(trees.drain(..)).rev() {
+                if let Some(t) = tree.take() {
+                    // create a clone of t with subtree as a child
+                    let (data, children) = t.content(fs)?;
+                    let (data, mut children) = (data.clone(), children.clone());
+                    children.insert(elt.to_string(), subtree.hash(fs)?.clone());
+                    subtree = Tree::for_content(Content::Tree { data, children });
                 } else {
-                    // no change -> no need to do anything
-                    return Ok(self.clone());
+                    // create a new tree with subtree as child
+                    let mut children = HashMap::new();
+                    children.insert(elt.to_string(), subtree.hash(fs)?.clone());
+                    subtree = Tree::for_content(Content::Tree {
+                        data: None,
+                        children,
+                    });
                 }
             }
+
+            Ok(subtree)
         } else {
-            panic!("{:?} is not a tree", self.inner.hash(fs).unwrap());
+            // newdata is None so we are deleting data; start by deleting the data from the leaf
+            let mut subtree = trees.pop().unwrap();
+            if let Some(ref st) = subtree {
+                let (_, children) = st.content(fs)?;
+                if children.len() > 0 {
+                    subtree = Some(Tree::for_content(Content::Tree {
+                        data: None,
+                        children: children.clone(),
+                    }))
+                } else {
+                    // this leaf node is now empty, so drop it
+                    subtree = None
+                }
+            } else {
+                // no data here to delete -- no change
+                return Ok(self.clone());
+            }
+            println!("modified subtree={:?}", subtree);
+
+            // and now work backward, deleting empty trees
+            for (elt, mut tree) in path.iter().zip(trees.drain(..)).rev() {
+                match (subtree.take(), tree.take()) {
+                    (Some(st), Some(t)) => {
+                        // create a clone of t with st as a child
+                        let (data, children) = t.content(fs)?;
+                        let (data, mut children) = (data.clone(), children.clone());
+                        children.insert(elt.to_string(), st.hash(fs)?.clone());
+                        subtree = Some(Tree::for_content(Content::Tree { data, children }));
+                    }
+                    (Some(st), None) => {
+                        // create a new tree with st as child
+                        let mut children = HashMap::new();
+                        children.insert(elt.to_string(), st.hash(fs)?.clone());
+                        subtree = Some(Tree::for_content(Content::Tree {
+                            data: None,
+                            children,
+                        }));
+                    }
+                    (None, Some(t)) => {
+                        // create a clone of t with elt removed, or None if t only contains elt
+                        let (data, children) = t.content(fs)?;
+                        if children.len() == 1 && children.keys().next().unwrap() == elt {
+                            subtree = None;
+                        } else {
+                            let (data, mut children) = (data.clone(), children.clone());
+                            children.remove(&elt[..]);
+                            subtree = Some(Tree::for_content(Content::Tree { data, children }));
+                        }
+                    }
+                    (None, None) => {
+                        // new subtree is still None
+                    }
+                };
+            }
+
+            if let Some(subtree) = subtree.take() {
+                Ok(subtree)
+            } else {
+                Ok(Tree::empty())
+            }
         }
     }
 }
@@ -211,13 +295,19 @@ mod test {
     }
 
     fn make_test_tree(fs: &FileSystem) -> Tree {
-        Tree::empty()
-            .write(fs, &["sub", "one"], vec![1])
-            .unwrap()
-            .write(fs, &["sub", "two"], vec![2])
-            .unwrap()
-            .write(fs, &["three"], vec![3])
-            .unwrap()
+        let mut rv = Tree::empty();
+        rv = rv.write(fs, &["sub", "one"], vec![1]).unwrap();
+        rv = rv.write(fs, &["sub", "two"], vec![2]).unwrap();
+        rv = rv.write(fs, &["three"], vec![3]).unwrap();
+        rv
+    }
+
+    fn dump_tree(tree: &Tree, fs: &FileSystem, prefix: &str) {
+        let (_, children) = tree.content(&fs).unwrap();
+        println!("{}: {:?}", prefix, tree);
+        for (name, tree) in children.iter() {
+            dump_tree(&Tree::for_hash(tree), fs, &format!("{}.{}", prefix, name));
+        }
     }
 
     #[test]
@@ -306,6 +396,22 @@ mod test {
     }
 
     #[test]
+    fn remove_nonexistent() {
+        let storage = LocalStorage::new();
+        let fs = FileSystem::new(Box::new(storage));
+
+        let tree = make_test_tree(&fs);
+        let tree = tree.remove(&fs, &["sub", "no", "such", "value"]).unwrap();
+
+        let tree = Tree::for_hash(tree.hash(&fs).unwrap());
+
+        assert_eq!(
+            tree.read(&fs, &["sub", "no", "such", "value"]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn remove_leaf() {
         let storage = LocalStorage::new();
         let fs = FileSystem::new(Box::new(storage));
@@ -328,6 +434,7 @@ mod test {
             .unwrap();
         let tree = Tree::for_hash(tree.hash(&fs).unwrap());
         let tree = tree.remove(&fs, &["a", "b", "c", "d"]).unwrap();
+        dump_tree(&tree, &fs, "tree");
 
         // should trim empty directories, so this should be empty
         assert_eq!(tree.hash(&fs).unwrap(), &Hash::from_hex(EMPTY_TREE_HASH));

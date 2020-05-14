@@ -1,6 +1,5 @@
 # Next
 
-* Rewrite modify to not be recursive
 * Make everything async
 
 # FS
